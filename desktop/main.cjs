@@ -2,7 +2,7 @@
  * AF6 Studio desktop shell (Electron).
  *
  * Runs the same production build as the server install, entirely on this PC:
- *   1. a private PostgreSQL cluster (embedded-postgres) in the user's app-data folder,
+ *   1. a private PostgreSQL cluster (binaries from @embedded-postgres, run via initdb/pg_ctl) in the user's app-data folder,
  *   2. the API and the worker as two child processes (Electron's Node, ELECTRON_RUN_AS_NODE),
  *   3. a window on http://127.0.0.1:<port>.
  * ffmpeg/ffprobe and the caption fonts ship inside the installer (resources/).
@@ -14,14 +14,13 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
-const { pathToFileURL } = require('node:url');
 
 const APP_DIR = app.getAppPath();
 const RES_DIR = app.isPackaged ? process.resourcesPath : path.join(__dirname, 'resources');
 const EXE = process.platform === 'win32' ? '.exe' : '';
 const DEFAULT_PORT = Number(process.env.AF6_PORT) || 8787;
 
-let userDir, logDir, pg, mainWindow;
+let userDir, logDir, mainWindow;
 const children = [];
 let quitting = false;
 
@@ -51,32 +50,66 @@ async function pickPort(preferred) {
   throw new Error(`No free port near ${preferred}`);
 }
 
+const PG_BIN = path.join(APP_DIR, 'node_modules', `@embedded-postgres/${process.platform === 'win32' ? 'windows' : process.platform}-x64`, 'native', 'bin');
+let dbDir;
+
+/** Run a PostgreSQL tool; resolves with its exit code and output. `quiet` = no pipes (pg_ctl start: postgres inherits them). */
+function pgTool(tool, args, { quiet = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(path.join(PG_BIN, `${tool}${EXE}`), args, { stdio: quiet ? 'ignore' : ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, LC_MESSAGES: 'C' } });
+    let out = '';
+    if (!quiet) { child.stdout.on('data', (b) => { out += b; }); child.stderr.on('data', (b) => { out += b; }); }
+    child.on('error', reject);
+    child.on('exit', (code) => resolve({ code, out: out.trim() }));
+  });
+}
+
+/**
+ * Private PostgreSQL cluster in the user's app-data folder, managed with initdb/pg_ctl.
+ * pg_ctl (not a direct postgres spawn) is required on Windows: it drops administrator
+ * rights before starting the server, which postgres otherwise refuses to run with.
+ */
 async function startDatabase() {
-  const { default: EmbeddedPostgres } = await import(pathToFileURL(require.resolve('embedded-postgres')).href);
-  const dbDir = path.join(userDir, 'database');
+  dbDir = path.join(userDir, 'database');
   const password = readOrCreate(path.join(userDir, 'db-password'), () => crypto.randomBytes(24).toString('base64url'));
   const port = await pickPort(54329);
-  const fresh = !fs.existsSync(path.join(dbDir, 'PG_VERSION'));
-  pg = new EmbeddedPostgres({
-    databaseDir: dbDir, user: 'studio', password, port, persistent: true, authMethod: 'scram-sha-256',
-    initdbFlags: ['--encoding=UTF8', '--locale=C'],
-    postgresFlags: ['-c', 'listen_addresses=127.0.0.1'],
-    onLog: (m) => log(`[postgres] ${String(m).trim()}`),
-    onError: (e) => log(`[postgres:error] ${e instanceof Error ? e.message : String(e).trim()}`),
-  });
-  if (fresh) { log('Creating database cluster'); await pg.initialise(); }
-  else if (fs.existsSync(path.join(dbDir, 'postmaster.pid'))) stopLeftoverPostgres(dbDir);
-  await pg.start();
-  if (fresh) await pg.createDatabase('studio');
+  if (!fs.existsSync(path.join(dbDir, 'PG_VERSION'))) {
+    log('Creating database cluster');
+    fs.rmSync(dbDir, { recursive: true, force: true }); // leftovers of an interrupted first start
+    const pwFile = path.join(userDir, `.pw-${process.pid}`);
+    fs.writeFileSync(pwFile, password, { mode: 0o600 });
+    try {
+      const r = await pgTool('initdb', ['-D', dbDir, '-U', 'studio', `--pwfile=${pwFile}`, '--auth=scram-sha-256', '--encoding=UTF8', '--locale=C']);
+      log(`[initdb] ${r.out}`);
+      if (r.code !== 0) throw new Error(`Could not create the database (initdb exit ${r.code}): ${r.out.slice(-800)}`);
+    } finally { fs.rmSync(pwFile, { force: true }); }
+  } else if (fs.existsSync(path.join(dbDir, 'postmaster.pid'))) {
+    // A crash of the app can leave its postgres running on this data dir; stop it (no-op otherwise).
+    const r = await pgTool('pg_ctl', ['stop', '-D', dbDir, '-m', 'fast', '-w', '-t', '20']);
+    log(`pg_ctl stop (leftover check): ${r.out || r.code}`);
+  }
+  const pgLog = path.join(logDir, 'postgres.log');
+  const r = await pgTool('pg_ctl', ['start', '-D', dbDir, '-l', pgLog, '-w', '-t', '90', '-o', `-p ${port} -c listen_addresses=127.0.0.1`], { quiet: true });
+  if (r.code !== 0) {
+    let tail = '';
+    try { tail = fs.readFileSync(pgLog, 'utf8').slice(-1500); } catch { /* no log */ }
+    throw new Error(`The database did not start (pg_ctl exit ${r.code}).\n${tail}`);
+  }
+  log(`Database running on port ${port}`);
+  const { Client } = require('pg');
+  const client = new Client({ host: '127.0.0.1', port, user: 'studio', password, database: 'postgres' });
+  await client.connect();
+  try {
+    const exists = await client.query("select 1 from pg_database where datname = 'studio'");
+    if (!exists.rowCount) await client.query('create database studio');
+  } finally { await client.end(); }
   return `postgres://studio:${encodeURIComponent(password)}@127.0.0.1:${port}/studio`;
 }
 
-/** After a crash of the app, its postgres may still be running on this data dir: stop it (no-op otherwise). */
-function stopLeftoverPostgres(dbDir) {
-  const binPkg = `@embedded-postgres/${process.platform === 'win32' ? 'windows' : process.platform}-x64`;
-  const pgCtl = path.join(APP_DIR, 'node_modules', binPkg, 'native', 'bin', `pg_ctl${EXE}`);
-  const r = require('node:child_process').spawnSync(pgCtl, ['stop', '-D', dbDir, '-m', 'fast', '-w', '-t', '20'], { encoding: 'utf8', windowsHide: true });
-  log(`pg_ctl stop (leftover check): ${(r.stdout || r.stderr || '').trim() || r.status}`);
+async function stopDatabase() {
+  if (!dbDir || !fs.existsSync(path.join(dbDir, 'postmaster.pid'))) return;
+  const r = await pgTool('pg_ctl', ['stop', '-D', dbDir, '-m', 'fast', '-w', '-t', '30']);
+  log(`pg_ctl stop: ${r.out || r.code}`);
 }
 
 function startChild(name, script, env) {
@@ -121,6 +154,7 @@ function fail(message) {
   if (failed) return;
   failed = true;
   log(`FATAL ${message}`);
+  if (process.env.CI) { app.quit(); return; } // unattended (CI): no modal dialog
   const r = dialog.showMessageBoxSync({
     type: 'error', title: 'AF6 Studio', message: 'AF6 Studio could not run',
     detail: `${message}\n\nLogs: ${logDir}`, buttons: ['Open logs folder', 'Quit'], defaultId: 1,
@@ -183,7 +217,7 @@ function stopChild(child, graceMs) {
 async function shutdown() {
   // API/worker first (they hold DB connections; interrupted jobs are resumed on next start), then the database.
   await Promise.all(children.map((c) => stopChild(c, 5000)));
-  if (pg) { try { await pg.stop(); } catch (e) { log(`postgres stop failed: ${e.message}`); } }
+  try { await stopDatabase(); } catch (e) { log(`postgres stop failed: ${e.message}`); }
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -201,7 +235,7 @@ if (!app.requestSingleInstanceLock()) {
       { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' }] },
     ]));
     return boot();
-  }).catch((e) => fail(e && e.stack ? e.stack : String(e)));
+  }).catch((e) => fail(e instanceof Error ? (e.stack || e.message) : `Startup failed: ${JSON.stringify(e)}`));
 
   app.on('window-all-closed', () => app.quit());
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => app.quit());

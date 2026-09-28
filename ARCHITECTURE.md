@@ -385,9 +385,12 @@ The desktop app ships the same production build, with no separate code
 path.
 
 * **`desktop/main.cjs`** is the Electron main process. It:
-  1. starts a private PostgreSQL 17 cluster (`embedded-postgres`) in
+  1. starts a private PostgreSQL 17 cluster in
      `%APPDATA%\AF6 Studio\database`, listening on 127.0.0.1, with a
-     random scram password stored next to it;
+     random scram password stored next to it. The binaries come from
+     `@embedded-postgres` and are run with `initdb` / `pg_ctl`. On Windows,
+     `pg_ctl` drops administrator rights, which postgres requires, so the
+     app also works for admin accounts;
   2. spawns `dist/server/main.js` and `dist/worker/main.js` as child
      processes using Electron's bundled Node (`ELECTRON_RUN_AS_NODE`);
   3. waits for `/api/health`, then loads `http://127.0.0.1:<port>` in the
