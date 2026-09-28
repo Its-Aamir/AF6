@@ -37,7 +37,7 @@ export const JOB_DEFAULTS: Record<JobType, { maxAttempts: number; timeoutMs: num
 };
 
 export async function enqueue(db: Tx, opts: EnqueueOptions): Promise<{ job: JobRow; deduped: boolean }> {
-  const d = JOB_DEFAULTS[opts.type];
+  const d = JOB_DEFAULTS[opts.type] ?? { maxAttempts: 3, timeoutMs: 120_000, priority: 0 };
   const values = {
     type: opts.type,
     payload: opts.payload,

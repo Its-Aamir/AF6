@@ -52,8 +52,14 @@ export function segmentNarration(words: WordTiming[], durationSec: number, minSe
     if (!cur) { cur = [...u]; continue; }
     const curDur = spanDur(words, cur[0], cur[1]);
     const merged = spanDur(words, cur[0], u[1]);
-    if (curDur < minSec || merged <= maxSec * 0.85) cur[1] = u[1];
-    else { groups.push(cur); cur = [...u]; }
+    if (merged <= maxSec * 0.85 || (curDur < minSec && merged <= maxSec)) { cur[1] = u[1]; continue; }
+    if (curDur < minSec) {
+      // Too short to stand alone and too long to merge forward: fold into the previous scene if it fits.
+      const prev = groups[groups.length - 1];
+      if (prev && spanDur(words, prev[0], cur[1]) <= maxSec) prev[1] = cur[1];
+      else groups.push(cur);
+    } else groups.push(cur);
+    cur = [...u];
   }
   if (cur) groups.push(cur);
   // 4. a too-short tail merges back if it keeps the previous scene reasonable
