@@ -181,14 +181,36 @@ interface LlmProvider { id; complete(req): { text, usage } }   // raw text; vali
   Node) so the rest of the pipeline is exercised end to end. Failure, timeout
   and latency behaviour come from `settings` and can be forced per prompt
   with `[mock:fail]` / `[mock:timeout]` for tests and demos.
-* **Real providers** (Google Veo, Kling, Higgsfield API, Higgsfield MCP) are
-  registered as descriptors with `implemented: false` and their required env
-  vars. The Providers page lists them honestly as "Not implemented". Each one
-  will be implemented against its current official docs once credentials
-  exist. Nothing is faked.
-* **Secrets** are read only from server env through `config.ts`. The API
-  exposes whether a key is present, never its value. The web bundle holds no
-  secrets.
+* **Real providers** (`providers/real/`) extend `RealProvider`. Their
+  credentials and enabled models come from a **connection**, not from code or
+  env:
+
+  | Adapter | Auth | Submit / poll | Built from |
+  |---|---|---|---|
+  | `google` | `x-goog-api-key` | Veo via `:predictLongRunning` + operation polling; Gemini images via `:generateContent` (stored immediately, then "polled") | `@google/genai` v2.24 mapping |
+  | `kling` | `Bearer <API key>` | `/text-to-video/{model}` + `GET /tasks`; `/v1/images/generations`; `external_task_id` for idempotent recovery | Official docs snapshot 2026-09-20 |
+  | `higgsfield-api` | `Key id:secret` | `POST /{endpoint}` + `/requests/{id}/status` | `@higgsfield/client` v2 |
+  | `higgsfield-mcp` | OAuth 2.1 (DCR + PKCE) or bearer token | MCP tools `generate_image`/`generate_video` + `jobs_wait`; `models_explore` for the catalog | Live tool schemas + `@modelcontextprotocol/sdk` |
+
+* **Connections** (`provider_connections` table, `providers/connections.ts`)
+  work like this:
+  * Secrets are AES-256-GCM encrypted (`security/secrets.ts`).
+  * The API and worker keep a 2-second cache so provider lookups stay
+    synchronous. The worker refreshes it before every job, and the API on
+    every request.
+  * Credentials are validated with a free request before they are stored.
+    Bad credentials are never saved.
+  * The browser only ever sees a hint (`…abcd`).
+* **Pricing** is per model and user-editable (Kling defaults come from the
+  official price list). A model with no price cannot be used, which keeps
+  the budget guard meaningful.
+* **Downloads** of provider outputs follow redirects manually. Credential
+  headers are sent only to the original host.
+* **MCP OAuth**: `PUT /api/connections/higgsfield-mcp` returns an
+  authorization URL. The provider redirects to
+  `/api/connections/oauth/callback`. The state is checked against the stored
+  value, then the SDK's `finishAuth` exchanges the code (PKCE), and tokens
+  are stored encrypted and refreshed by the SDK.
 
 ## 8. LLM usage and structured output
 
@@ -320,10 +342,11 @@ icons. It is dark, dense and desktop-first.
 ## 15. Phase plan
 
 * **Phase 1 (this build)**: everything above, with mock providers.
-* **Phase 2**:
+* **Phase 2 (in progress)**:
+  * Done: real media provider connections (Google Veo/Gemini, Kling,
+    Higgsfield API, Higgsfield MCP).
   * Real LLM adapter (structured outputs).
-  * First real media provider, chosen once docs and credentials are
-    confirmed.
+  * Image-to-video (animate the scene still).
   * Optional research step with source capture.
   * Per-provider concurrency and rate limits.
   * Auth and multi-user.

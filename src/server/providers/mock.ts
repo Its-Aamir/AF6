@@ -44,7 +44,7 @@ export function estimateMockCost(req: GenerationRequest): CostEstimate {
   let units = 1;
   if (m.unit === 'second') units = Math.max(1, Math.ceil(req.durationSec ?? 5));
   if (m.unit === '1k_chars') units = Math.max(0.001, (req.text ?? req.prompt).length / 1000);
-  return { units, unit: m.unit, unitCostUsd: m.unitCostUsd, amountUsd: round4(units * m.unitCostUsd), simulated: true };
+  return { units, unit: m.unit, unitCostUsd: m.unitCostUsd ?? 0, amountUsd: round4(units * (m.unitCostUsd ?? 0)), simulated: true };
 }
 
 function palette(seed: number): [string, string, string] {

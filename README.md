@@ -7,11 +7,14 @@ on the narration's word timings. It then plans visuals per scene, generates
 assets, assembles a timeline with captions and music, runs QA, and renders
 an MP4.
 
-**Phase 1** (this repository) ships the complete pipeline on **mock
-providers**, so the whole workflow runs end to end without credentials or
-credits. Real providers (Veo, Kling, Higgsfield API/MCP) are registered as
-adapter descriptors only. They will be implemented against their official
-docs once credentials are available.
+The whole pipeline runs end to end on built-in **mock providers** with no
+credentials. When you're ready, connect a real provider from the
+**Providers** page and switch scenes to its models:
+
+* **Google Veo + Gemini:** paste a Gemini API key.
+* **Kling AI:** paste an API key.
+* **Higgsfield API:** paste a key ID and secret.
+* **Higgsfield MCP:** sign in with OAuth.
 
 See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the design.
 
@@ -81,14 +84,56 @@ horizontally (`npm run start:worker` several times). Jobs are claimed with
 | `WORKER_POLL_MS` | `500` | Queue poll interval when idle |
 | `MAX_UPLOAD_MB` | `200` | Upload size limit |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | `ffmpeg` / `ffprobe` | Media binaries |
-| `GOOGLE_VEO_API_KEY`, `KLING_ACCESS_KEY`, `KLING_SECRET_KEY`, `HIGGSFIELD_API_KEY`, `HIGGSFIELD_MCP_URL` | none | Reserved for future adapters. Only presence is reported, on the Providers page. Not used in Phase 1. |
+| `SECRETS_KEY` | auto-generated key file | Encrypts provider credentials at rest (32 bytes, base64: `openssl rand -base64 32`). Set it explicitly in production and back it up. |
+| `PUBLIC_BASE_URL` | `http://HOST:PORT` | Public URL of this server, used as the OAuth redirect for MCP sign-in |
 
-Secrets are read on the server only. The browser never receives key values.
+Provider credentials are **not** environment variables. You enter them on
+the Providers page. They are checked with a free request before saving,
+encrypted with AES-256-GCM, and never sent back to the browser.
+
+## Connecting real providers
+
+Open **Providers**, click **Connect** on a provider, and paste its
+credential (or sign in, for MCP). Enabled models then appear in:
+
+* Channel Recipe defaults
+* each scene's model picker
+* the Storyboard's project-wide Video/Image model switch
+
+| Provider | You need | What you get | Source the adapter was built from |
+|---|---|---|---|
+| **Google Veo + Gemini** | A Gemini API key ([AI Studio](https://aistudio.google.com/apikey)) | Veo video models + Gemini image models, **discovered from your key** | Official `@google/genai` SDK request mapping |
+| **Kling AI** | A Kling API key ([console](https://kling.ai/dev/api-key)) | Kling 3.0 Turbo / 3.0 / 2.6 / 2.5 Turbo video, Kling Image 3.0 / 2.1 | Official Kling API docs (2026-09-20). Official prices pre-filled. |
+| **Higgsfield API** | Key ID + secret (Higgsfield console) | Any Higgsfield endpoint you add (image or video), with optional per-endpoint extra input | Official `@higgsfield/client` v2 SDK |
+| **Higgsfield MCP** | Your Higgsfield account (OAuth sign-in) | Higgsfield's model catalog (Seedance, Kling, Veo, GPT Image, …) via the official MCP server | Live tool schemas of `https://mcp.higgsfield.ai/mcp`, official MCP SDK |
+
+How it behaves:
+
+* **Prices:** every model has a USD price per second or per image, which
+  feeds the budget guard and the cost ledger. Kling prices are pre-filled
+  from its official price list. For Google, Higgsfield and MCP models, you
+  enter your own price. **Generation is refused for a model without a
+  price**, so the budget guard always works.
+* **Durations:** video models declare allowed clip lengths. The studio
+  requests the shortest allowed length that covers the scene; the renderer
+  trims or loops to the exact narration timing.
+* **No double billing after a crash:** Kling submissions carry an
+  idempotency key (`external_task_id`). A worker that crashes after
+  submitting finds the existing task instead of paying twice.
+* **Higgsfield MCP never spends your unlimited/free-trial allowance** on
+  its own (`use_unlim: false` is always sent).
+* **Status of these adapters:** they were built against the sources above
+  and verified against local servers that implement those documented
+  contracts (`tests/providers.test.ts`). They have not been run against the
+  live services yet, because no credentials exist in this environment.
+  Connect a key, generate one scene, and check it before running a whole
+  project.
 
 ## Tests
 
 ```bash
 npm test                # unit + integration (state machines, queue, providers, segmentation, LLM validation, QA)
+                        # + provider contract tests against local fake Google/Kling/Higgsfield/MCP(+OAuth) servers
 npm run test:e2e        # full 18-step acceptance workflow through the HTTP API, incl. worker-crash recovery and real MP4 render
 npm run typecheck
 
@@ -97,9 +142,9 @@ npm run build && npm start &          # in another terminal
 npm run test:ui                        # screenshots → ./screenshots
 ```
 
-Tests run against `TEST_DATABASE_URL` with `NODE_ENV=test`. The provider
-registry refuses every non-mock provider in that mode, so tests can never
-spend real credits.
+Tests run against `TEST_DATABASE_URL` with `NODE_ENV=test`. In that mode
+the provider registry refuses any real provider whose endpoint is not a
+local fake server, so tests can never reach a real API or spend credits.
 
 ## Using the mock provider
 

@@ -8,8 +8,11 @@ export interface ModelInfo {
   label: string;
   description: string;
   unit: PricingUnit;
-  unitCostUsd: number;
+  /** null = price unknown; generation is refused until the user sets it (the budget guard needs it). */
+  unitCostUsd: number | null;
   maxDurationSec?: number;
+  /** Allowed discrete output durations (seconds) for video models. */
+  durations?: number[];
   /** Mock only: multiplies simulated latency. */
   speedFactor?: number;
 }
@@ -32,13 +35,15 @@ export interface GenerationRequest {
   wordsPerMinute?: number;
   /** Human label (e.g. "Scene 3") — used by mock rendering only. */
   label?: string;
+  /** Stable per-submission key; adapters that support it use it to avoid double submission after a crash. */
+  idempotencyKey?: string;
 }
 
 export interface CostEstimate { units: number; unit: PricingUnit; unitCostUsd: number; amountUsd: number; simulated: boolean }
 
 export type ProviderOutput =
   | { kind: 'file'; path: string; mime: string; ext: string; words?: WordTiming[]; metadata?: Record<string, unknown> }
-  | { kind: 'url'; url: string; mime: string; ext: string; words?: WordTiming[]; metadata?: Record<string, unknown> };
+  | { kind: 'url'; url: string; mime: string; ext: string; words?: WordTiming[]; metadata?: Record<string, unknown>; headers?: Record<string, string> };
 
 export interface PollResult {
   status: 'queued' | 'running' | 'succeeded' | 'failed';
@@ -53,6 +58,15 @@ export interface PollResult {
 
 export interface ProviderContext { signal?: AbortSignal }
 
+/** How the user connects a provider from the UI. */
+export interface ConnectionSpec {
+  method: 'api_key' | 'mcp_oauth';
+  fields: { key: string; label: string; secret: boolean; placeholder?: string; help?: string; optional?: boolean }[];
+  consoleUrl?: string;
+  docsUrl?: string;
+  summary: string;
+}
+
 export interface GenerationProvider {
   id: string;
   displayName: string;
@@ -64,12 +78,14 @@ export interface GenerationProvider {
   requiredEnv: string[];
   models: ModelInfo[];
   voices?: VoiceInfo[];
+  connection?: ConnectionSpec;
   configStatus(): { configured: boolean; missingEnv: string[] };
   estimateCost(req: GenerationRequest): CostEstimate;
   submit(req: GenerationRequest, ctx: ProviderContext): Promise<{ externalId: string }>;
   poll(externalId: string, ctx: ProviderContext): Promise<PollResult>;
   cancel?(externalId: string): Promise<void>;
 }
+
 
 // ── LLM ──────────────────────────────────────────────────────────────────────
 

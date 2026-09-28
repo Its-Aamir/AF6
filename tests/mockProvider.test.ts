@@ -62,10 +62,11 @@ describe('mock provider', () => {
     await expect(mock.submit({ capability: 'image', model: 'mock-video-standard', prompt: 'x' })).rejects.toMatchObject({ code: 'PROVIDER_NOT_AVAILABLE' });
   });
 
-  it('registry refuses unimplemented and real providers in tests', () => {
-    expect(() => resolveModel('video', 'google-veo', 'any')).toThrow(/not implemented/);
+  it('registry refuses real provider endpoints in tests (no real credits)', () => {
+    expect(() => resolveModel('video', 'google', 'veo-3.1-generate-preview')).toThrow(/disabled in the test environment/);
+    expect(() => resolveModel('video', 'kling', 'kling-3.0-turbo')).toThrow(/disabled in the test environment/);
     expect(() => resolveModel('video', 'nope', 'any')).toThrow(/Unknown provider/);
-    expect(() => resolveModel('video', 'mock', 'mock-image-standard')).toThrow(/not a video model/);
+    expect(() => resolveModel('video', 'mock', 'mock-image-standard')).toThrow(/not an enabled video model/);
   });
 
   it('cleans up', async () => { await fs.rm('/nonexistent', { force: true }); });

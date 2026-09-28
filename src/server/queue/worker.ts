@@ -8,6 +8,7 @@ import type { Db } from '../db/client';
 import { jobs, type JobRow } from '../db/schema';
 import { AppError, toAppError } from '../errors';
 import { getHandler } from '../jobs/registry';
+import { refreshConnections } from '../providers/connections';
 import { claimJob, completeJob, failJob, heartbeat, rescheduleJob } from './queue';
 
 export interface WorkerOptions {
@@ -91,6 +92,7 @@ export class Worker {
       await failJob(this.db, job, this.id, new AppError('INTERNAL', `No handler registered for job type ${job.type}`, { retryable: false }));
       return;
     }
+    try { await refreshConnections(this.db); } catch (e) { log('could not refresh provider connections', { error: (e as Error).message }); }
     const parsed = handler.payloadSchema.safeParse(job.payload);
     const terminal = async (error: AppError) => {
       if (!parsed.success || !handler.onFailed) return;

@@ -57,6 +57,8 @@ export function StoryboardTab({ state, actions }: { state: ProjectState; actions
           <span>narration {p.narrationDurationSec?.toFixed(1)}s</span>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <ModelSwitch state={state} capability="video" />
+          <ModelSwitch state={state} capability="image" />
           <Button size="sm" icon={<Sparkles className="size-3.5" />} loading={actions.plan.isPending || p.status === 'planning'} disabled={p.busy || p.status === 'producing'} onClick={() => actions.plan.mutate()}>
             {planned ? 'Re-plan unlocked' : 'Plan visuals'}
           </Button>
@@ -97,7 +99,7 @@ function SceneCard({ scene: s, state, onPreview, onReplace }: { scene: Scene; st
   const cap = s.visualStrategy === 'ai_video' ? 'video' : 'image';
   const modelOptions = (providers.data ?? []).filter((pr) => pr.capabilities.includes(cap)).flatMap((pr) =>
     pr.implemented && pr.configured ? pr.models.filter((m) => m.capability === cap).map((m) => ({ value: `${pr.id}::${m.id}`, label: `${m.label.replace(/^Mock /, '')} · ${usd(m.unitCostUsd, 2)}/${UNIT[m.unit] ?? m.unit}`, disabled: false }))
-      : [{ value: `${pr.id}::`, label: `${pr.displayName} — ${pr.implemented ? 'not configured' : 'adapter pending'}`, disabled: true }]);
+      : [{ value: `${pr.id}::`, label: `${pr.displayName} — not connected (Providers page)`, disabled: true }]);
   const canEdit = !s.locked && !busy && s.status !== 'pending';
   const lockedReason = s.locked ? 'Scene is locked' : busy ? 'Generation in progress' : undefined;
 
@@ -295,5 +297,28 @@ function ReplaceModal({ state, scene, onClose }: { state: ProjectState; scene: S
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Project-level model choice: applies to every unlocked scene of that kind and becomes the project default. */
+function ModelSwitch({ state, capability }: { state: ProjectState; capability: 'image' | 'video' }) {
+  const p = state.project;
+  const providers = useProviders();
+  const { toast } = useToast();
+  const current = p.recipeSnapshot.defaults[capability];
+  const options = (providers.data ?? []).filter((pr) => pr.implemented && pr.configured).flatMap((pr) =>
+    pr.models.filter((m) => m.capability === capability).map((m) => ({ value: `${pr.id}::${m.id}`, label: `${pr.transport === 'mock' ? 'Mock · ' : `${pr.displayName} · `}${m.label.replace(/^Mock /, '')}${m.unitCostUsd == null ? ' (set price)' : ''}` })));
+  const apply = useAction((v: string) => {
+    const [provider, model] = v.split('::');
+    return api.post<{ updatedScenes: number }>(`/projects/${p.id}/scenes/model`, { capability, provider, model }).then((r) => { toast('ok', `${capability === 'video' ? 'Video' : 'Image'} model updated`, `${r.updatedScenes} unlocked scene(s) switched.`); return r; });
+  }, { projectId: p.id });
+  return (
+    <label className="flex items-center gap-1.5 text-[11px] text-muted" title={`Model for all unlocked ${capability} scenes`}>
+      {capability === 'video' ? <Film className="size-3.5" /> : <ImageIcon className="size-3.5" />}
+      <select className="input w-52 py-1 text-[12px]" disabled={p.busy || apply.isPending} value={`${current.provider}::${current.model}`} onChange={(e) => apply.mutate(e.target.value)}>
+        {!options.some((o) => o.value === `${current.provider}::${current.model}`) && <option value={`${current.provider}::${current.model}`}>{current.model} (unavailable)</option>}
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
   );
 }

@@ -198,3 +198,34 @@ export type GenerationRow = typeof generations.$inferSelect;
 export type JobRow = typeof jobs.$inferSelect;
 export type RecipeRow = typeof recipes.$inferSelect;
 export type CostEntryRow = typeof costEntries.$inferSelect;
+
+/** A user-connected generation provider (API key or MCP). Secrets are encrypted at rest. */
+export interface ConnectionModel {
+  id: string;
+  capability: 'image' | 'video' | 'tts' | 'music';
+  label: string;
+  enabled: boolean;
+  /** USD per unit. null = unknown: generation is refused until the user sets it (budget guard needs it). */
+  unitCostUsd: number | null;
+  unit: 'image' | 'second';
+  /** Allowed output durations (video). The closest allowed value ≥ the scene is requested. */
+  durations?: number[];
+  source: 'discovered' | 'catalog' | 'custom';
+  /** Extra input fields merged into the provider request (user-owned settings, e.g. Higgsfield endpoint params). */
+  extraInput?: Record<string, unknown>;
+  notes?: string;
+}
+
+export const providerConnections = pgTable('provider_connections', {
+  providerId: text('provider_id').primaryKey(),
+  status: text('status').$type<'connected' | 'error' | 'authorization_required'>().notNull(),
+  secretCiphertext: text('secret_ciphertext'),
+  secretHint: text('secret_hint'),
+  config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
+  models: jsonb('models').$type<ConnectionModel[]>().notNull().default([]),
+  lastTestedAt: timestamp('last_tested_at', { withTimezone: true }),
+  lastError: text('last_error'),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+export type ProviderConnectionRow = typeof providerConnections.$inferSelect;

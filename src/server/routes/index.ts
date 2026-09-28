@@ -13,7 +13,9 @@ import { getDb } from '../db/client';
 import { assets, projects, recipes } from '../db/schema';
 import { AppError, notFound } from '../errors';
 import { checkMediaTooling, probe } from '../media/ffmpeg';
+import { refreshConnections } from '../providers/connections';
 import { listProviders } from '../providers/registry';
+import { registerConnectionRoutes } from './connections';
 import { createVideoThumbnail, ingestFile } from '../services/assets';
 import {
   assembleProjectTimeline, editScript, generateCaptions, markTimelineStale, requestMusic, requestPackage, requestVoicePreview,
@@ -70,6 +72,9 @@ async function sendAsset(req: FastifyRequest, reply: FastifyReply, download: boo
 
 export async function registerRoutes(app: FastifyInstance) {
   const db = getDb();
+  // Provider connections can change in another process (worker) or via the UI: keep the cache fresh.
+  app.addHook('onRequest', async () => { await refreshConnections(db); });
+  await app.register(registerConnectionRoutes);
 
   app.get('/health', async () => {
     await db.execute(sql`select 1`);

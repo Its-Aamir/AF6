@@ -38,7 +38,7 @@ export async function buildApp(opts: { serveWeb?: boolean } = {}): Promise<Fasti
     const here = path.dirname(fileURLToPath(import.meta.url));
     const webDir = [path.resolve(process.cwd(), 'dist/web'), path.resolve(here, '../web')].find((p) => existsSync(path.join(p, 'index.html')));
     if (webDir) {
-      await app.register(fastifyStatic, { root: webDir, wildcard: false });
+      await app.register(fastifyStatic, { root: webDir, wildcard: true });
       // SPA fallback: deep links like /projects/:id/storyboard survive refresh.
       app.setNotFoundHandler((req, reply) => {
         if (req.url.startsWith('/api/')) return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Route not found', details: null } });

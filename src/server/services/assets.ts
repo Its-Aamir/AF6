@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import type { AssetKind, MediaType } from '../../shared/schemas';
+import { config } from '../config';
 import type { Tx } from '../db/client';
 import { assets, type AssetRow } from '../db/schema';
 import { AppError } from '../errors';
@@ -84,10 +85,19 @@ const MAX_REMOTE_BYTES = 2 * 1024 * 1024 * 1024;
 export async function materializeOutput(out: ProviderOutput, signal?: AbortSignal): Promise<{ path: string; cleanup: () => Promise<void> }> {
   if (out.kind === 'file') return { path: out.path, cleanup: async () => {} };
   const url = new URL(out.url);
-  if (url.protocol !== 'https:') throw new AppError('PROVIDER_ERROR', 'Refusing non-HTTPS provider output URL', { retryable: false });
+  if (url.protocol !== 'https:' && !(config.isTest && ['127.0.0.1', 'localhost'].includes(url.hostname))) throw new AppError('PROVIDER_ERROR', 'Refusing non-HTTPS provider output URL', { retryable: false });
   const dir = await getStorage().tmpDir('download');
   const file = path.join(dir, `output.${out.ext.replace(/[^a-z0-9]/gi, '')}`);
-  const res = await fetch(url, { signal });
+  // Follow redirects manually so provider credentials are only ever sent to the original host.
+  let res: Response = await fetch(url, { signal, headers: out.headers, redirect: 'manual' });
+  let current = url;
+  for (let hop = 0; hop < 5 && res.status >= 300 && res.status < 400 && res.headers.get('location'); hop++) {
+    const next = new URL(res.headers.get('location')!, current);
+    if (next.protocol !== 'https:' && !config.isTest) throw new AppError('PROVIDER_ERROR', 'Refusing non-HTTPS redirect for provider output', { retryable: false });
+    const sameHost = next.host === url.host;
+    res = await fetch(next, { signal, headers: sameHost ? out.headers : undefined, redirect: 'manual' });
+    current = next;
+  }
   if (!res.ok || !res.body) throw new AppError('PROVIDER_ERROR', `Downloading provider output failed: HTTP ${res.status}`);
   const len = Number(res.headers.get('content-length') ?? 0);
   if (len > MAX_REMOTE_BYTES) throw new AppError('PROVIDER_ERROR', 'Provider output too large', { retryable: false });

@@ -5,15 +5,17 @@ import { getDb } from '../src/server/db/client';
 import { seed } from '../src/server/db/seed';
 import { Worker } from '../src/server/queue/worker';
 import { saveSettings } from '../src/server/services/settings';
+import { invalidateConnections } from '../src/server/providers/connections';
 import type { MockSettings } from '../src/shared/schemas';
 
 export async function resetDb(mock: Partial<MockSettings> = {}): Promise<void> {
   if (!config.isTest || !config.databaseUrl.includes('test')) throw new Error('resetDb outside test env');
   const db = getDb();
-  await db.execute(sql`truncate jobs, cost_entries, generations, assets, scenes, projects, mock_provider_tasks, settings, recipes restart identity cascade`);
+  await db.execute(sql`truncate jobs, cost_entries, generations, assets, scenes, projects, mock_provider_tasks, settings, recipes, provider_connections restart identity cascade`);
   await seed(db);
   await saveSettings(db, { defaultBudgetUsd: 25, mock: { latencyMs: 150, failureRate: 0, timeoutRate: 0, timeoutMs: 20_000, ...mock } });
   await fs.rm(config.storageDir, { recursive: true, force: true });
+  invalidateConnections();
 }
 
 export function startWorker(opts: { leaseMs?: number; concurrency?: number } = {}): Worker {

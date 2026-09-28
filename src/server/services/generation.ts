@@ -50,7 +50,7 @@ export async function driveGeneration(ctx: JobContext<unknown>, generationId: st
     signal.throwIfAborted();
     const settings = await getSettings(db);
     const deadlineMs = provider.transport === 'mock' ? settings.mock.timeoutMs : POLL_DEFAULT_DEADLINE_MS;
-    const { externalId } = await provider.submit(request, { signal });
+    const { externalId } = await provider.submit({ ...request, idempotencyKey: `${gen.id}-${gen.submitAttempts + 1}` }, { signal });
     const [updated] = await db.update(generations).set({
       externalId, status: 'submitted', submittedAt: new Date(), deadlineAt: new Date(Date.now() + deadlineMs),
       submitAttempts: sql`${generations.submitAttempts} + 1`, jobId: ctx.job.id, progress: 0, updatedAt: new Date(),

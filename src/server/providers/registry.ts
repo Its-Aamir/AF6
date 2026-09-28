@@ -2,11 +2,16 @@ import type { Capability } from '../../shared/schemas';
 import { config } from '../config';
 import { AppError } from '../errors';
 import { MockProvider } from './mock';
-import { STUB_PROVIDERS } from './stubs';
+import { RealProvider } from './real/base';
+import { GoogleProvider } from './real/google';
+import { HiggsfieldApiProvider } from './real/higgsfieldApi';
+import { HiggsfieldMcpProvider } from './real/higgsfieldMcp';
+import { KlingProvider } from './real/kling';
+import { isLoopback } from './real/http';
 import type { GenerationProvider, ModelInfo } from './types';
 
 const providers = new Map<string, GenerationProvider>();
-for (const p of [new MockProvider(), ...STUB_PROVIDERS]) providers.set(p.id, p);
+for (const p of [new MockProvider(), new GoogleProvider(), new KlingProvider(), new HiggsfieldApiProvider(), new HiggsfieldMcpProvider()]) providers.set(p.id, p);
 
 export function listProviders(): GenerationProvider[] {
   return [...providers.values()];
@@ -32,18 +37,19 @@ export function resolveModel(capability: Capability, providerId: string, modelId
   if (!provider.implemented) {
     throw new AppError('PROVIDER_NOT_AVAILABLE', `${provider.displayName} is not implemented yet; choose another provider.`, { retryable: false });
   }
-  if (config.isTest && provider.transport !== 'mock') {
+  // Tests may exercise real adapters only against local fake servers — never real endpoints/credits.
+  if (config.isTest && provider.transport !== 'mock' && !(provider instanceof RealProvider && isLoopback(provider.baseUrl))) {
     throw new AppError('PROVIDER_NOT_AVAILABLE', 'Real providers are disabled in the test environment (no real credits in tests).', { retryable: false });
   }
   const status = provider.configStatus();
   if (!status.configured) {
-    throw new AppError('PROVIDER_NOT_AVAILABLE', `${provider.displayName} is not configured (missing: ${status.missingEnv.join(', ')}).`, { retryable: false });
+    throw new AppError('PROVIDER_NOT_AVAILABLE', `${provider.displayName} is not connected. Connect it on the Providers page.`, { retryable: false });
   }
   if (!provider.capabilities.includes(capability)) {
     throw new AppError('PROVIDER_NOT_AVAILABLE', `${provider.displayName} does not support ${capability}.`, { retryable: false });
   }
   const model = provider.models.find((m) => m.id === modelId && m.capability === capability);
-  if (!model) throw new AppError('PROVIDER_NOT_AVAILABLE', `Model "${modelId}" is not a ${capability} model of ${provider.displayName}.`, { retryable: false });
+  if (!model) throw new AppError('PROVIDER_NOT_AVAILABLE', `Model "${modelId}" is not an enabled ${capability} model of ${provider.displayName}.`, { retryable: false });
   return { provider, model };
 }
 
@@ -53,4 +59,10 @@ export function findVoice(voiceId: string) {
     if (v) return { provider: p, voice: v };
   }
   return null;
+}
+
+export function getRealProvider(id: string): RealProvider {
+  const p = getProvider(id);
+  if (!(p instanceof RealProvider)) throw new AppError('VALIDATION_ERROR', `${p.displayName} does not use connections`);
+  return p;
 }
