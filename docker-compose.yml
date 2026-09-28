@@ -1,3 +1,5 @@
+# One-command install:  docker compose up -d --build   →  http://localhost:8787
+# (For local development you can start only the database: docker compose up -d postgres)
 services:
   postgres:
     image: postgres:16
@@ -5,7 +7,39 @@ services:
       POSTGRES_USER: studio
       POSTGRES_PASSWORD: studio
       POSTGRES_DB: studio
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data", "./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studio -d studio"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    image: af6-studio
+    environment: &appenv
+      DATABASE_URL: postgres://studio:studio@postgres:5432/studio
+      PUBLIC_BASE_URL: http://localhost:8787
+      # Optional: set SECRETS_KEY (openssl rand -base64 32). Otherwise a key is generated in the data volume.
+      SECRETS_KEY: ${SECRETS_KEY:-}
+    # Bound to this computer only — the studio has no login, don't expose it to the network.
+    ports: ["127.0.0.1:8787:8787"]
+    volumes: ["studiodata:/data"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    image: af6-studio
+    command: ["node", "dist/worker/main.js"]
+    environment: *appenv
+    volumes: ["studiodata:/data"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      api: { condition: service_started }
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  studiodata:

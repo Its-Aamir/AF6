@@ -38,6 +38,43 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the design.
 
 ![Storyboard](docs/screenshots/storyboard.png)
 
+## Quick install (Docker, Windows / macOS / Linux)
+
+The easiest way to try it. You only need
+[Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
+and running.
+
+1. Download this repository:
+   * **Code → Download ZIP** on GitHub, then unzip it;
+   * or `git clone`.
+2. Open a terminal in the folder (on Windows, PowerShell) and run:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+   The first run downloads and builds everything, which takes a few minutes.
+3. Open **http://localhost:8787** in your browser.
+
+Useful commands:
+
+* **Stop:** `docker compose down`. Your projects and keys are kept.
+* **Start again:** `docker compose up -d`.
+* **Update to a newer version:** download it again, then run
+  `docker compose up -d --build`.
+* **Logs:** `docker compose logs -f api worker`.
+
+About the Docker install:
+
+* Your projects, rendered videos and encrypted keys are stored in Docker
+  volumes (`studiodata`, `pgdata`).
+* The studio has no login, so it only listens on your own computer
+  (`127.0.0.1`).
+* Out of the box it runs on the simulated providers. Open **Providers** to
+  add your ElevenLabs, Veo, Kling, Higgsfield or Claude keys.
+
+The rest of this README covers running from source (for development).
+
 ## Requirements
 
 | Tool | Version | Why |
@@ -48,7 +85,7 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the design.
 
 On macOS: `brew install node postgresql@16 ffmpeg`.
 On Debian/Ubuntu: `apt install postgresql ffmpeg`.
-Alternatively, run Postgres with `docker compose up -d`.
+Alternatively, run Postgres with `docker compose up -d postgres`.
 
 ## Setup
 
@@ -56,8 +93,8 @@ Alternatively, run Postgres with `docker compose up -d`.
 npm install
 cp .env.example .env            # adjust DATABASE_URL if needed
 
-# Database: either use docker compose…
-docker compose up -d            # creates databases "studio" and "studio_test" (user/password: studio)
+# Database: either use docker compose (database only)…
+docker compose up -d postgres   # creates databases "studio" and "studio_test" (user/password: studio)
 # …or create them on an existing server:
 createuser -P studio            # password: studio
 createdb -O studio studio
