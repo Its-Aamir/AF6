@@ -12,7 +12,7 @@ import { toAss } from '../services/captions';
 import { probe, runFfmpeg } from './ffmpeg';
 
 export interface RenderOptions {
-  preset: 'draft' | 'final';
+  preset: 'draft' | 'final' | 'hd';
   resolveAssetPath: (assetId: string) => string;
   workDir: string;
   outPath: string;
@@ -48,7 +48,7 @@ function motionFilter(motion: TimelineClip['motion'], W: number, H: number, dur:
 }
 
 export async function renderTimeline(t: Timeline, o: RenderOptions): Promise<{ durationSec: number; width: number; height: number }> {
-  const scale = o.preset === 'draft' ? 0.5 : 1;
+  const scale = o.preset === 'draft' ? 0.5 : o.preset === 'hd' ? 1.5 : 1;
   const W = Math.round((t.width * scale) / 2) * 2;
   const H = Math.round((t.height * scale) / 2) * 2;
   const fps = t.fps;
@@ -99,13 +99,15 @@ export async function renderTimeline(t: Timeline, o: RenderOptions): Promise<{ d
     if (t.music.duck) {
       filters.push(`[nar]asplit=2[nar1][nar2]`);
       filters.push(`[mus][nar2]sidechaincompress=threshold=0.02:ratio=6:attack=15:release=350[ducked]`);
-      filters.push(`[nar1][ducked]amix=inputs=2:duration=first:normalize=0[aout]`);
+      filters.push(`[nar1][ducked]amix=inputs=2:duration=first:normalize=0[mix]`);
     } else {
-      filters.push(`[nar][mus]amix=inputs=2:duration=first:normalize=0[aout]`);
+      filters.push(`[nar][mus]amix=inputs=2:duration=first:normalize=0[mix]`);
     }
   } else {
-    filters.push(`[nar]anull[aout]`);
+    filters.push(`[nar]anull[mix]`);
   }
+  // Loudness-normalise the final mix to YouTube's reference (-14 LUFS, -1.5 dBTP).
+  filters.push(`[mix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]`);
   const total = Math.round(t.durationSec * fps) / fps;
   args.push(
     '-filter_complex', filters.join(';'), '-map', vOut, '-map', '[aout]', '-t', total.toFixed(3),

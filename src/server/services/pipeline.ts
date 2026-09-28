@@ -65,7 +65,7 @@ export async function resetDownstream(tx: Tx, projectId: string, from: 'script' 
   const p = await tx.query.projects.findFirst({ where: eq(projects.id, projectId), columns: { captions: true } });
   await tx.update(projects).set({
     ...base,
-    narrationAssetId: null, narrationDurationSec: null, narrationWords: null, musicAssetId: null,
+    narrationAssetId: null, narrationDurationSec: null, narrationWords: null, narrationTimingSource: null,
     captions: { ...p!.captions, cues: [], generatedAt: null },
   }).where(eq(projects.id, projectId));
 }
@@ -132,12 +132,20 @@ export async function startNarration(db: Db, projectId: string, confirmReset = f
     const p = await lockProject(tx, projectId);
     if (!p.script) throw new AppError('INVALID_STATE', 'Generate the script first.');
     await guardRewind(tx, p, 'narration', confirmReset);
+    if (p.voiceoverAssetId) {
+      // User-supplied voiceover: align the script to it instead of synthesising speech.
+      await startStep(tx, p, 'narration');
+      return (await enqueue(tx, { type: 'narration.align', payload: { projectId }, projectId, dedupeKey: `narration:${projectId}` })).job;
+    }
     const ref = p.recipeSnapshot.defaults.tts;
     const voice = findVoice(p.voiceId);
-    const providerId = voice?.provider.id ?? ref.provider;
+    if (!voice) throw new AppError('VALIDATION_ERROR', `Voice "${p.voiceId}" is not available. Pick a voice on the Audio tab (connect ElevenLabs for real voices).`);
+    const providerId = voice.provider.id;
+    const ttsModel = providerId === ref.provider ? ref.model : voice.provider.models.find((m) => m.capability === 'tts')?.id;
+    if (!ttsModel) throw new AppError('PROVIDER_NOT_AVAILABLE', `${voice.provider.displayName} has no enabled TTS model. Enable one on the Providers page.`);
     const text = p.script.sections.map((s) => s.narration).join('\n\n');
-    const request = { capability: 'tts' as const, model: ref.model, prompt: `Narration for "${p.title}"`, text, voiceId: p.voiceId, wordsPerMinute: p.recipeSnapshot.wordsPerMinute };
-    const { provider } = resolveModel('tts', providerId, ref.model);
+    const request = { capability: 'tts' as const, model: ttsModel, prompt: `Narration for "${p.title}"`, text, voiceId: p.voiceId, wordsPerMinute: p.recipeSnapshot.wordsPerMinute };
+    const { provider } = resolveModel('tts', providerId, ttsModel);
     const estimate = provider.estimateCost(request);
     await assertWithinBudget(tx, projectId, estimate.amountUsd);
     await startStep(tx, p, 'narration');
@@ -215,7 +223,7 @@ export async function startQa(db: Db, projectId: string) {
   });
 }
 
-export async function startRender(db: Db, projectId: string, preset: 'draft' | 'final') {
+export async function startRender(db: Db, projectId: string, preset: 'draft' | 'final' | 'hd') {
   return db.transaction(async (tx) => {
     const p = await lockProject(tx, projectId);
     if (!p.timeline) throw new AppError('INVALID_STATE', 'Assemble the timeline first.');
@@ -245,6 +253,6 @@ export async function requestVoicePreview(db: Db, voiceId: string) {
   });
 }
 
-export function renderResolution(p: ProjectRow, preset: 'draft' | 'final') {
+export function renderResolution(p: ProjectRow, preset: 'draft' | 'final' | 'hd') {
   return resolutionFor(p.recipeSnapshot.aspectRatio, preset);
 }

@@ -60,7 +60,7 @@ afterAll(async () => {
 describe('provider connections', () => {
   it('lists connectable providers without secrets', async () => {
     const r = await api('GET', '/connections');
-    expect(r.body.map((p: any) => p.id)).toEqual(['google', 'kling', 'higgsfield-api', 'higgsfield-mcp']);
+    expect(r.body.map((p: any) => p.id)).toEqual(['google', 'kling', 'higgsfield-api', 'higgsfield-mcp', 'elevenlabs', 'anthropic']);
     expect(r.body.every((p: any) => p.status === 'not_connected')).toBe(true);
   });
 

@@ -1,6 +1,7 @@
 import type {
-  Captions, MusicSettings, ProjectStatus, QaReport, RecipeConfig, Script, SceneBrief, Settings, Timeline, WordTiming,
+  AutopilotState, Captions, MusicSettings, ProjectStatus, QaReport, RecipeConfig, RenderReport, Script, SceneBrief, Settings, Timeline, WordTiming,
 } from '../../../src/shared/schemas';
+export type { AutopilotState, RenderReport };
 
 export type { ProjectStatus, RecipeConfig, Settings, Timeline };
 
@@ -38,6 +39,7 @@ export interface Project {
   narrationDurationSec: number | null; narrationWords: WordTiming[] | null; visualStyleNotes: string | null; music: MusicSettings;
   musicAssetId: string | null; captions: Captions; timeline: Timeline | null; qaReport: QaReport | null; finalRenderAssetId: string | null;
   packageAssetId: string | null; budgetUsd: number; lastError: string | null; createdAt: string; updatedAt: string; busy: boolean; timelineCurrent: boolean;
+  voiceoverAssetId: string | null; narrationTimingSource: string | null; autopilot: AutopilotState | null; renderReport: RenderReport | null;
 }
 
 export interface ProjectState {

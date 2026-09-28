@@ -7,11 +7,13 @@ import { GoogleProvider } from './real/google';
 import { HiggsfieldApiProvider } from './real/higgsfieldApi';
 import { HiggsfieldMcpProvider } from './real/higgsfieldMcp';
 import { KlingProvider } from './real/kling';
+import { ElevenLabsProvider } from './real/elevenlabs';
+import { ClaudeProvider } from './real/claude';
 import { isLoopback } from './real/http';
 import type { GenerationProvider, ModelInfo } from './types';
 
 const providers = new Map<string, GenerationProvider>();
-for (const p of [new MockProvider(), new GoogleProvider(), new KlingProvider(), new HiggsfieldApiProvider(), new HiggsfieldMcpProvider()]) providers.set(p.id, p);
+for (const p of [new MockProvider(), new GoogleProvider(), new KlingProvider(), new HiggsfieldApiProvider(), new HiggsfieldMcpProvider(), new ElevenLabsProvider(), new ClaudeProvider()]) providers.set(p.id, p);
 
 export function listProviders(): GenerationProvider[] {
   return [...providers.values()];

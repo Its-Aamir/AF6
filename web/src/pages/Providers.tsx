@@ -8,7 +8,7 @@ import { api, ApiError } from '../lib/api';
 import { ago } from '../lib/format';
 import { useAction, useProviders } from '../lib/hooks';
 
-interface ConnModel { id: string; capability: 'image' | 'video'; label: string; enabled: boolean; unitCostUsd: number | null; unit: 'image' | 'second'; durations?: number[]; source: string; extraInput?: Record<string, unknown>; notes?: string }
+interface ConnModel { id: string; capability: 'image' | 'video' | 'tts' | 'music' | 'llm' | 'stt'; label: string; enabled: boolean; unitCostUsd: number | null; unit: 'image' | 'second' | '1k_chars' | '1k_tokens' | 'minute'; durations?: number[]; source: string; extraInput?: Record<string, unknown>; notes?: string }
 interface Conn {
   id: string; displayName: string; transport: 'api' | 'mcp'; capabilities: string[]; notes: string; defaultBaseUrl: string;
   connection: { method: 'api_key' | 'mcp_oauth'; summary: string; consoleUrl?: string; docsUrl?: string; fields: { key: string; label: string; secret: boolean; placeholder?: string; help?: string; optional?: boolean }[] };
@@ -52,6 +52,8 @@ function Recommendation() {
         <li><b className="text-fg">Best price for motion:</b> Kling API — text-to-video from $0.042/s (2.x) or $0.112/s (3.0 Turbo) with official per-second prices pre-filled.</li>
         <li><b className="text-fg">Highest-end cinematic video:</b> Google Veo — one Gemini API key gives Veo video and Gemini image models. Set your per-second price from your Google billing.</li>
         <li><b className="text-fg">Mix and match:</b> connect several. Use a cheap image model for most scenes and switch only hero scenes to video in the Storyboard.</li>
+        <li><b className="text-fg">Voice:</b> ElevenLabs — realistic narration with exact word timing; also aligns voiceovers you upload.</li>
+        <li><b className="text-fg">AI Director:</b> Claude — writes scripts and plans every scene's prompt and shot. Without it, a basic template planner is used.</li>
       </ul>
     </div>
   );
@@ -69,7 +71,7 @@ function ConnectionCard({ c, onConnect }: { c: Conn; onConnect: () => void }) {
   const disconnect = useAction(() => api.del(`/connections/${c.id}`), { ...inv, success: `${c.displayName} disconnected` });
   const [label, tone] = STATUS[c.status];
   const connected = c.status === 'connected';
-  const needPrice = c.models.filter((m) => m.enabled && m.unitCostUsd == null).length;
+  const needPrice = c.models.filter((m) => m.enabled && m.unitCostUsd == null && m.capability !== 'llm' && m.capability !== 'stt').length;
   return (
     <Panel title={<span className="flex items-center gap-2">{c.displayName}<Badge>{c.transport === 'mcp' ? 'MCP' : 'API'}</Badge><Badge tone={tone}>{label}</Badge>
       {connected && needPrice > 0 && <Badge tone="warn"><CircleAlert className="size-3" />{needPrice} model{needPrice > 1 ? 's' : ''} need a price</Badge>}</span>}
@@ -108,7 +110,7 @@ function ModelTable({ c, onChanged }: { c: Conn; onChanged: () => void }) {
               <td className="py-1.5 pr-2"><Toggle checked={m.enabled} onChange={(v) => save.mutate({ id: m.id, capability: m.capability, enabled: v })} /></td>
               <td className="pr-3"><div className={clsx(!m.enabled && 'text-muted')}>{m.label}</div><div className="text-[10.5px] text-faint">{m.id}{m.notes ? ` · ${m.notes}` : ''}</div></td>
               <td><Badge>{m.capability}</Badge></td>
-              <td><PriceInput m={m} onSave={(v) => save.mutate({ id: m.id, capability: m.capability, unitCostUsd: v })} /></td>
+              <td>{m.capability === 'llm' ? <span className="text-faint">billed per token (automatic)</span> : m.capability === 'stt' ? <span className="text-faint">included in your plan</span> : <PriceInput m={m} onSave={(v) => save.mutate({ id: m.id, capability: m.capability, unitCostUsd: v })} />}</td>
               <td>{m.capability === 'video' ? <DurationsInput m={m} onSave={(d) => save.mutate({ id: m.id, capability: m.capability, durations: d })} /> : <span className="text-faint">—</span>}</td>
               <td className="text-right">{m.source === 'custom' && <Button size="xs" variant="ghost" aria-label="Remove model" icon={<Trash2 className="size-3" />} onClick={() => remove.mutate(m)} />}</td>
             </tr>
@@ -128,7 +130,7 @@ function PriceInput({ m, onSave }: { m: ConnModel; onSave: (v: number | null) =>
   return (
     <label className="flex items-center gap-1">
       <input className={clsx('input w-20 py-0.5 text-[12px]', m.enabled && m.unitCostUsd == null && 'border-warn/60')} inputMode="decimal" placeholder="set" value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && commit()} />
-      <span className="text-faint">/{m.unit === 'second' ? 's' : 'img'}</span>
+      <span className="text-faint">/{m.unit === 'second' ? 's' : m.unit === '1k_chars' ? '1k chars' : 'img'}</span>
     </label>
   );
 }

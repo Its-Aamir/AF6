@@ -44,7 +44,7 @@ export type MediaType = (typeof MEDIA_TYPES)[number];
 
 export const JOB_TYPES = [
   'script.generate', 'narration.generate', 'scenes.segment', 'visuals.plan',
-  'scene.generate', 'music.generate', 'qa.run', 'render.final', 'package.export', 'voice.preview',
+  'scene.generate', 'music.generate', 'qa.run', 'narration.align', 'project.autopilot', 'render.final', 'package.export', 'voice.preview',
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -223,6 +223,10 @@ export const CreateProjectInputSchema = z.strictObject({
   sourceScript: z.string().max(MAX_SCRIPT_CHARS).default(''),
   recipeId: z.string().uuid(),
   budgetUsd: z.number().min(0).max(100_000).optional(),
+  /** Optional overrides of the recipe's defaults: narration voice and visual models. */
+  voiceId: z.string().min(1).max(160).optional(),
+  imageModel: ProviderModelRefSchema.optional(),
+  videoModel: ProviderModelRefSchema.optional(),
 }).superRefine((v, ctx) => {
   if (v.inputMode === 'topic' && v.topic.trim().length < 3) ctx.addIssue({ code: 'custom', path: ['topic'], message: 'Enter a topic (at least 3 characters).' });
   if (v.inputMode === 'script' && v.sourceScript.trim().split(/\s+/).length < 10) ctx.addIssue({ code: 'custom', path: ['sourceScript'], message: 'Paste a script of at least 10 words.' });
@@ -259,7 +263,7 @@ export const GenerateSceneInputSchema = z.strictObject({
 
 export const SceneDurationInputSchema = z.strictObject({ durationSec: z.number().positive().max(600) });
 export const SelectAssetInputSchema = z.strictObject({ assetId: z.string().uuid() });
-export const RenderInputSchema = z.strictObject({ preset: z.enum(['draft', 'final']).default('final') });
+export const RenderInputSchema = z.strictObject({ preset: z.enum(['draft', 'final', 'hd']).default('final') });
 
 export const MockSettingsSchema = z.strictObject({
   latencyMs: z.number().int().min(0).max(120_000),
@@ -280,10 +284,45 @@ export const UpdateSettingsInputSchema = z.strictObject({
 });
 
 /** Aspect ratio → render/generation resolution by preset. */
-export function resolutionFor(aspect: AspectRatio, preset: 'draft' | 'final'): { width: number; height: number } {
-  const long = preset === 'final' ? 1280 : 640;
-  const short = preset === 'final' ? 720 : 360;
+export function resolutionFor(aspect: AspectRatio, preset: 'draft' | 'final' | 'hd'): { width: number; height: number } {
+  const long = preset === 'hd' ? 1920 : preset === 'final' ? 1280 : 640;
+  const short = preset === 'hd' ? 1080 : preset === 'final' ? 720 : 360;
   if (aspect === '16:9') return { width: long, height: short };
   if (aspect === '9:16') return { width: short, height: long };
   return { width: short, height: short };
+}
+
+// ── Autopilot / render report ────────────────────────────────────────────────
+
+export const AUTOPILOT_STEPS = ['script', 'narration', 'segment', 'plan', 'assets', 'captions', 'music', 'assemble', 'qa', 'render', 'package', 'done'] as const;
+export type AutopilotStep = (typeof AUTOPILOT_STEPS)[number];
+
+export interface AutopilotState {
+  running: boolean;
+  step: AutopilotStep;
+  message: string;
+  startedAt: string;
+  finishedAt: string | null;
+  jobId: string | null;
+  attempts: Record<string, number>;
+  fixRounds: number;
+  error: string | null;
+  preset: 'draft' | 'final' | 'hd';
+  log: { at: string; message: string }[];
+}
+
+export interface RenderReportCheck { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string }
+export interface RenderReport {
+  assetId: string;
+  measuredAt: string;
+  durationSec: number;
+  width: number;
+  height: number;
+  integratedLufs: number | null;
+  truePeakDb: number | null;
+  blackSegments: { start: number; end: number }[];
+  silentSegments: { start: number; end: number }[];
+  simulatedContent: string[];
+  publishReady: boolean;
+  checks: RenderReportCheck[];
 }

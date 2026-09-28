@@ -34,6 +34,8 @@ export const JOB_DEFAULTS: Record<JobType, { maxAttempts: number; timeoutMs: num
   'render.final': { maxAttempts: 2, timeoutMs: 1_800_000, priority: 1 },
   'package.export': { maxAttempts: 2, timeoutMs: 600_000, priority: 1 },
   'voice.preview': { maxAttempts: 3, timeoutMs: 60_000, priority: 8 },
+  'narration.align': { maxAttempts: 3, timeoutMs: 600_000, priority: 10 },
+  'project.autopilot': { maxAttempts: 6, timeoutMs: 120_000, priority: 20 },
 };
 
 export async function enqueue(db: Tx, opts: EnqueueOptions): Promise<{ job: JobRow; deduped: boolean }> {

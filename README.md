@@ -1,6 +1,21 @@
 # AF6 Studio
 
-An AI-assisted, narration-first video production studio. You start from a
+An AI-assisted, narration-first video production studio that turns what you
+have into an upload-ready MP4:
+
+* **Only a script (or just a topic)** → the studio narrates it (ElevenLabs),
+  plans and generates the visuals (Veo / Kling / Higgsfield), adds captions,
+  mixes and renders.
+* **Script + your own voiceover + your own music** → your recording becomes
+  the master timeline (script aligned word by word), your track is mixed
+  under it with ducking, and visuals are generated to fit.
+
+Open **Create**, paste the script, optionally drop in the voiceover and
+music files, and press **Produce video**. **Autopilot** runs every step,
+retries failures, regenerates scenes that fail QA, renders in 1080p and
+tells you whether the result is ready to upload.
+
+You can also drive each step by hand. You start from a
 topic or a script and pick a **Channel Recipe**. The studio then writes the
 script, generates narration and measures its real duration, and cuts scenes
 on the narration's word timings. It then plans visuals per scene, generates
@@ -15,6 +30,9 @@ credentials. When you're ready, connect a real provider from the
 * **Kling AI:** paste an API key.
 * **Higgsfield API:** paste a key ID and secret.
 * **Higgsfield MCP:** sign in with OAuth.
+* **ElevenLabs:** paste an API key (narration voices + voiceover transcription).
+* **Claude (AI Director):** paste an Anthropic API key (script writing and
+  scene planning).
 
 See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the design.
 
@@ -106,6 +124,14 @@ credential (or sign in, for MCP). Enabled models then appear in:
 | **Kling AI** | A Kling API key ([console](https://kling.ai/dev/api-key)) | Kling 3.0 Turbo / 3.0 / 2.6 / 2.5 Turbo video, Kling Image 3.0 / 2.1 | Official Kling API docs (2026-09-20). Official prices pre-filled. |
 | **Higgsfield API** | Key ID + secret (Higgsfield console) | Any Higgsfield endpoint you add (image or video), with optional per-endpoint extra input | Official `@higgsfield/client` v2 SDK |
 | **Higgsfield MCP** | Your Higgsfield account (OAuth sign-in) | Higgsfield's model catalog (Seedance, Kling, Veo, GPT Image, …) via the official MCP server | Live tool schemas of `https://mcp.higgsfield.ai/mcp`, official MCP SDK |
+| **ElevenLabs** | An API key ([settings](https://elevenlabs.io/app/settings/api-keys)) | Your voices as narration voices (exact per-word timestamps), TTS models, and Scribe transcription to align uploaded voiceovers | Official `@elevenlabs/elevenlabs-js` SDK wire format |
+| **Claude (AI Director)** | An Anthropic API key ([console](https://console.anthropic.com/settings/keys)) | Script writing, script analysis and per-scene visual planning (`claude-opus-5` by default). Every response is still validated against strict schemas. | Official `@anthropic-ai/sdk` |
+
+**Which to pick:** ElevenLabs for the voice; Claude as the director; for
+visuals, Higgsfield MCP for the widest catalog with one sign-in, Kling for
+the best price on motion, Veo for top-end cinematic shots. You can connect
+several and mix them per scene. Keep images for most scenes and use video
+for hero scenes to control cost.
 
 How it behaves:
 
@@ -129,11 +155,49 @@ How it behaves:
   Connect a key, generate one scene, and check it before running a whole
   project.
 
+## Producing a video (Autopilot)
+
+1. **Create** → *My script* (or *Just a topic*), pick a Channel Recipe.
+2. Optional: attach **Voiceover** and **Music** (wav, mp3, m4a, aac, flac or
+   ogg). The files are validated with ffprobe; anything else is rejected.
+3. Choose the voice and the video/image models. The page warns you about
+   anything that would still be simulated.
+4. **Produce video.** Autopilot is a durable background job, so you can
+   close the browser. It runs script → narration or voiceover alignment →
+   scenes → visual plan → generation (with up to two rounds of fixes for
+   failed scenes) → captions → music → timeline → QA (fixing and re-checking
+   up to twice) → render → package. It stops, with the reason shown,
+   when a step can't succeed: missing price, budget reached, or a
+   non-retryable provider error. Fix the cause and press **Run again**.
+
+**How the voiceover is aligned:** with ElevenLabs connected, it is
+transcribed and the transcript is aligned to your script (exact timings).
+Without it, the studio aligns your script to the recording's speech pauses
+(approximate, but close enough for scene cuts and captions). The Audio tab
+shows which method was used.
+
+**Music:** upload your own track or pick one from your library. No real
+music-generation provider is integrated yet. Without an uploaded track,
+Autopilot produces the video without music.
+
+**Ready to upload?** After rendering, the Publish tab checks:
+
+* the resolution;
+* loudness, normalised to −14 LUFS integrated with a true peak of at most
+  −1.5 dBTP (YouTube's reference);
+* black frames;
+* long silences;
+* that nothing in the video is simulated (mock visuals or voice).
+
+A video made with mock providers renders fine, but it is marked **Not
+yet** ready to upload.
+
 ## Tests
 
 ```bash
 npm test                # unit + integration (state machines, queue, providers, segmentation, LLM validation, QA)
-                        # + provider contract tests against local fake Google/Kling/Higgsfield/MCP(+OAuth) servers
+                        # + provider contract tests against local fake Google/Kling/Higgsfield/MCP(+OAuth)/ElevenLabs/Anthropic servers
+                        # + Autopilot: topic-only, script+voiceover+music (transcription and pause alignment), budget stop
 npm run test:e2e        # full 18-step acceptance workflow through the HTTP API, incl. worker-crash recovery and real MP4 render
 npm run typecheck
 
@@ -159,7 +223,7 @@ local fake server, so tests can never reach a real API or spend credits.
 
 ## Workflow
 
-**Create → Script → Narration (measured) → Scenes → Visual plan → Generate
+**Create → Script → Narration (measured, or your aligned voiceover) → Scenes → Visual plan → Generate
 visuals → Captions / Music → Assemble timeline → QA → Render → Package.**
 
 Each step is available both from the studio header ("next step") and from

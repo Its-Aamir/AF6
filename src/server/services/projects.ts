@@ -4,7 +4,7 @@ import { isBusy } from '../../shared/stateMachines';
 import type { Db } from '../db/client';
 import { assets, costEntries, generations, jobs, projects, recipes, scenes, type JobRow } from '../db/schema';
 import { AppError, notFound } from '../errors';
-import { findVoice } from '../providers/registry';
+import { findVoice, resolveModel } from '../providers/registry';
 import { failJob } from '../queue/queue';
 import { getHandler } from '../jobs/registry';
 import { projectCostSummary } from './costs';
@@ -12,10 +12,16 @@ import {
   requestMusic, requestPackage, requestVoicePreview, startNarration, startPlan, startQa, startRender, startScript, startSegment,
 } from './pipeline';
 import { generateScene } from './scenes';
+import { startAutopilot } from './autopilot';
 import { sanitizeText } from '../llm/structured';
 import { getSettings } from './settings';
 import { timelineIsCurrent } from './timeline';
 import { MAX_SCRIPT_CHARS } from '../../shared/schemas';
+
+function checkModel(capability: 'image' | 'video', ref: { provider: string; model: string }) {
+  resolveModel(capability, ref.provider, ref.model); // refuses unusable providers/models with a clear error
+  return ref;
+}
 
 export async function createProject(db: Db, input: CreateProjectInput) {
   const recipe = await db.query.recipes.findFirst({ where: eq(recipes.id, input.recipeId) });
@@ -29,8 +35,15 @@ export async function createProject(db: Db, input: CreateProjectInput) {
     sourceScript: input.inputMode === 'script' ? sanitizeText(input.sourceScript, MAX_SCRIPT_CHARS) : '',
     recipeId: recipe.id,
     recipeName: recipe.name,
-    recipeSnapshot: c,
-    voiceId: findVoice(c.voiceId) ? c.voiceId : 'mock-narrator-warm',
+    recipeSnapshot: {
+      ...c,
+      defaults: {
+        ...c.defaults,
+        ...(input.imageModel ? { image: checkModel('image', input.imageModel) } : {}),
+        ...(input.videoModel ? { video: checkModel('video', input.videoModel) } : {}),
+      },
+    },
+    voiceId: input.voiceId && findVoice(input.voiceId) ? input.voiceId : findVoice(c.voiceId) ? c.voiceId : 'mock-narrator-warm',
     music: { enabled: c.music.enabled, mood: c.music.mood, volume: c.music.volume, duck: true },
     captions: { enabled: c.captions.enabled, position: c.captions.position, maxChars: c.captions.maxChars, cues: [], generatedAt: null },
     budgetUsd: input.budgetUsd ?? settings.defaultBudgetUsd,
@@ -145,7 +158,7 @@ export async function retryJob(db: Db, jobId: string): Promise<JobRow | JobRow[]
   const job = await db.query.jobs.findFirst({ where: eq(jobs.id, jobId) });
   if (!job) throw notFound('Job');
   if (job.status !== 'failed' && job.status !== 'cancelled') throw new AppError('INVALID_STATE', 'Only failed or cancelled jobs can be retried.');
-  const p = job.payload as { projectId?: string; preset?: 'draft' | 'final'; voiceId?: string };
+  const p = job.payload as { projectId?: string; preset?: 'draft' | 'final' | 'hd'; voiceId?: string };
   const pid = job.projectId ?? p.projectId;
   const need = () => { if (!pid) throw new AppError('INVALID_STATE', 'Job has no project'); return pid; };
   switch (job.type as JobType) {
@@ -162,6 +175,8 @@ export async function retryJob(db: Db, jobId: string): Promise<JobRow | JobRow[]
     case 'render.final': return startRender(db, need(), p.preset ?? 'final');
     case 'package.export': return requestPackage(db, need());
     case 'voice.preview': return requestVoicePreview(db, p.voiceId ?? '');
+    case 'narration.align': return startNarration(db, need(), true);
+    case 'project.autopilot': return startAutopilot(db, need());
   }
 }
 

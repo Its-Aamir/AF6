@@ -103,7 +103,7 @@ export interface LlmRequest {
   signal?: AbortSignal;
 }
 
-export interface LlmResponse { text: string; inputTokens: number; outputTokens: number }
+export interface LlmResponse { text: string; inputTokens: number; outputTokens: number; costUsd?: number }
 
 export interface LlmProvider {
   id: string;

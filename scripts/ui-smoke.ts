@@ -58,9 +58,11 @@ async function main() {
 
   log('create project');
   await page.getByRole('link', { name: 'Create', exact: true }).click();
-  await page.getByPlaceholder('e.g. The Lost Library of Alexandria').fill('Deep Sea Vents (UI smoke)');
+  await page.getByRole('button', { name: /Just a topic/ }).click();
+  await page.getByPlaceholder('Defaults to the first line').fill('Deep Sea Vents (UI smoke)');
   await page.getByPlaceholder('What is the video about?').fill('hydrothermal vents in the deep ocean');
   await page.getByRole('button', { name: /Faceless Shorts/ }).click();
+  await page.getByRole('switch').first().click(); // manual mode for this walkthrough (Autopilot tested below)
   await snap(page, 'create');
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.waitForURL(/\/projects\/[0-9a-f-]+\/script/);
@@ -115,7 +117,7 @@ async function main() {
   log('captions + music');
   await page.goto(`${BASE}/projects/${id}/audio`);
   await page.getByRole('button', { name: 'Generate captions' }).click();
-  await page.getByRole('button', { name: 'Generate mock music' }).click();
+  await page.getByRole('button', { name: 'Generate music (provider)' }).click();
   const start = Date.now();
   for (;;) {
     const s = await api<{ project: { musicAssetId: string | null; captions: { cues: unknown[] } } }>(page, `/projects/${id}`);
@@ -160,6 +162,45 @@ async function main() {
     await page.waitForLoadState('networkidle');
     await snap(page, name);
   }
+
+  log('autopilot: script + uploaded voiceover + uploaded music, from the Create page');
+  const { encodeWav, planSpeech, synthesizeSpeech } = await import('../src/server/media/wav');
+  const script = 'Deep beneath the ocean, hot water pours from the seafloor. Around these vents, life thrives without sunlight.\n\nTube worms, crabs and shrimp gather in the warmth. Every expedition reveals something new.';
+  const plan = planSpeech(script, 145);
+  const tmp = path.join(OUT, 'tmp');
+  await fs.mkdir(tmp, { recursive: true });
+  const vo = path.join(tmp, 'my-voiceover.wav');
+  await fs.writeFile(vo, encodeWav(synthesizeSpeech(plan.words, plan.durationSec, { basePitch: 140, wordsPerMinuteFactor: 1 })));
+  const mu = path.join(tmp, 'my-music.wav');
+  await fs.writeFile(mu, encodeWav(new Float32Array(22050 * 6).map((_, i) => 0.2 * Math.sin((2 * Math.PI * 220 * i) / 22050))));
+  await page.goto(`${BASE}/create`);
+  await page.getByPlaceholder('Paste your narration script…').fill(script);
+  await page.locator('input[type=file]').nth(0).setInputFiles(vo);
+  await page.locator('input[type=file]').nth(1).setInputFiles(mu);
+  await page.getByRole('button', { name: /Documentary Explainer/ }).click();
+  await snap(page, 'create-autopilot');
+  await page.getByRole('button', { name: 'Produce video' }).click();
+  await page.waitForURL(/storyboard/);
+  const apId = page.url().split('/projects/')[1].split('/')[0];
+  await page.getByText(/Autopilot ·/).first().waitFor({ timeout: 20_000 });
+  await page.waitForTimeout(4000);
+  await snap(page, 'autopilot-running');
+  const apStart = Date.now();
+  for (;;) {
+    const s = await api<{ project: { autopilot: { running: boolean; error: string | null } | null; status: string } }>(page, `/projects/${apId}`);
+    if (s.project.autopilot && !s.project.autopilot.running) {
+      if (s.project.autopilot.error) throw new Error(`Autopilot stopped: ${s.project.autopilot.error}`);
+      break;
+    }
+    if (Date.now() - apStart > 600_000) throw new Error('autopilot timeout');
+    await page.waitForTimeout(2000);
+  }
+  await page.goto(`${BASE}/projects/${apId}/publish`);
+  await page.getByText('Ready to upload?').waitFor();
+  await snap(page, 'autopilot-publish');
+  await page.goto(`${BASE}/projects/${apId}/audio`);
+  await page.getByText(/Aligned from speech pauses|Aligned by transcription/).first().waitFor();
+  await snap(page, 'autopilot-audio');
 
   log('reopen project from projects list');
   await page.goto(`${BASE}/projects`);

@@ -27,6 +27,7 @@
     "test:ui": "tsx scripts/ui-smoke.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@fastify/multipart": "^10.1.2",
     "@fastify/static": "^10.1.5",
     "@modelcontextprotocol/sdk": "^1.30.1",

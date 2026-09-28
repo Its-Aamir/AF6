@@ -17,7 +17,7 @@ export function extractJson(text: string): unknown {
   return JSON.parse(t.slice(first, last + 1));
 }
 
-export interface StructuredResult<T> { value: T; inputTokens: number; outputTokens: number; repaired: boolean }
+export interface StructuredResult<T> { value: T; inputTokens: number; outputTokens: number; repaired: boolean; costUsd?: number }
 
 export async function runStructured<S extends z.ZodType>(
   llm: LlmProvider,
@@ -27,11 +27,13 @@ export async function runStructured<S extends z.ZodType>(
 ): Promise<StructuredResult<z.infer<S>>> {
   let inputTokens = 0;
   let outputTokens = 0;
+  let costUsd: number | undefined;
   let errors: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await llm.complete({ ...req, repairErrors: attempt > 0 ? errors : undefined });
     inputTokens += res.inputTokens;
     outputTokens += res.outputTokens;
+    if (res.costUsd != null) costUsd = (costUsd ?? 0) + res.costUsd;
     let raw: unknown;
     try {
       raw = extractJson(res.text);
@@ -46,7 +48,7 @@ export async function runStructured<S extends z.ZodType>(
     }
     const broken = invariants?.(parsed.data) ?? [];
     if (broken.length) { errors = broken; continue; }
-    return { value: parsed.data, inputTokens, outputTokens, repaired: attempt > 0 };
+    return { value: parsed.data, inputTokens, outputTokens, repaired: attempt > 0, costUsd };
   }
   throw new AppError('LLM_OUTPUT_INVALID', `Model output failed validation after repair: ${errors.slice(0, 3).join('; ')}`, { details: errors });
 }

@@ -15,6 +15,13 @@
       "when": 1790578783773,
       "tag": "0001_provider_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790580901823,
+      "tag": "0002_phase2_production",
+      "breakpoints": true
     }
   ]
 }

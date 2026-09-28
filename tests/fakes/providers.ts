@@ -224,3 +224,60 @@ export function fakeHiggsfieldMcp(token = 'mcp-test-token') {
     await transport.handleRequest(req, res, body);
   });
 }
+
+// ── ElevenLabs (TTS with timestamps + speech-to-text) ────────────────────────
+export function fakeElevenLabs(apiKey = 'sk_eleven_test_key_000', opts: { transcript?: { text: string; start: number; end: number }[] } = {}) {
+  return serve(async (req, res, body, fake) => {
+    const u = new URL(req.url!, fake.url);
+    if (req.headers['xi-api-key'] !== apiKey) return json(res, 401, { detail: { status: 'invalid_api_key', message: 'Invalid API key' } });
+    if (u.pathname === '/v1/models') return json(res, 200, [{ model_id: 'eleven_multilingual_v2', name: 'Eleven Multilingual v2', can_do_text_to_speech: true }, { model_id: 'eleven_english_sts_v2', name: 'STS', can_do_text_to_speech: false }]);
+    if (u.pathname === '/v1/voices') return json(res, 200, { voices: [{ voice_id: 'voice123', name: 'Rachel', category: 'premade' }] });
+    const m = /^\/v1\/text-to-speech\/([\w-]+)\/with-timestamps$/.exec(u.pathname);
+    if (m && req.method === 'POST') {
+      if (typeof body?.text !== 'string' || !body.model_id) return json(res, 422, { detail: 'text and model_id required' });
+      // Build real speech-like audio + exact character alignment from the text.
+      const { planSpeech, synthesizeSpeech, encodeWav } = await import('../../src/server/media/wav');
+      const plan = planSpeech(body.text, 160);
+      const wav = encodeWav(synthesizeSpeech(plan.words, plan.durationSec, { basePitch: 180, wordsPerMinuteFactor: 1 }));
+      const { spawnSync } = await import('node:child_process');
+      const mp3 = spawnSync(config.ffmpegPath, ['-loglevel', 'error', '-f', 'wav', '-i', 'pipe:0', '-f', 'mp3', 'pipe:1'], { input: wav, maxBuffer: 1 << 28 }).stdout;
+      const characters: string[] = []; const starts: number[] = []; const ends: number[] = [];
+      plan.words.forEach((w, i) => {
+        const per = (w.end - w.start) / w.word.length;
+        [...w.word].forEach((ch, k) => { characters.push(ch); starts.push(w.start + k * per); ends.push(w.start + (k + 1) * per); });
+        if (i < plan.words.length - 1) { characters.push(' '); starts.push(w.end); ends.push(plan.words[i + 1].start); }
+      });
+      return json(res, 200, { audio_base64: Buffer.from(mp3).toString('base64'), alignment: { characters, character_start_times_seconds: starts, character_end_times_seconds: ends }, normalized_alignment: null });
+    }
+    if (u.pathname === '/v1/speech-to-text' && req.method === 'POST') {
+      const words = (opts.transcript ?? []).flatMap((w, i, a) => [{ text: w.text, start: w.start, end: w.end, type: 'word' }, ...(i < a.length - 1 ? [{ text: ' ', start: w.end, end: a[i + 1].start, type: 'spacing' }] : [])]);
+      return json(res, 200, { language_code: 'en', language_probability: 1, text: (opts.transcript ?? []).map((w) => w.text).join(' '), words });
+    }
+    json(res, 404, { detail: 'Not found' });
+  });
+}
+
+// ── Anthropic Messages API (for the Claude AI Director) ──────────────────────
+export function fakeAnthropic(apiKey = 'sk-ant-test-key-0000000000') {
+  return serve((req, res, body, fake) => {
+    const u = new URL(req.url!, fake.url);
+    if (req.headers['x-api-key'] !== apiKey) return json(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
+    if (u.pathname === '/v1/models') return json(res, 200, { data: [{ type: 'model', id: 'claude-opus-5', display_name: 'Claude Opus 5', created_at: '2026-01-01T00:00:00Z' }, { type: 'model', id: 'claude-sonnet-5', display_name: 'Claude Sonnet 5', created_at: '2026-01-01T00:00:00Z' }], has_more: false, first_id: 'claude-opus-5', last_id: 'claude-sonnet-5' });
+    if (u.pathname === '/v1/messages' && req.method === 'POST') {
+      const prompt: string = body.messages?.[0]?.content ?? '';
+      let out: unknown;
+      if (/Write a narration script/.test(prompt)) {
+        const sections = /Sections \(in order\): (.*)\./.exec(prompt)?.[1].split(' | ') ?? ['Intro'];
+        out = { title: 'Claude-written title', summary: 'A summary written by Claude.', hook: 'Deep beneath the waves, life thrives without sunlight.', sections: sections.map((h, i) => ({ heading: h, narration: `Section ${i + 1} narration. Deep beneath the waves, chimneys of rock pour out mineral-rich water. Strange creatures gather in the warmth, far from any sunlight.` })) };
+      } else if (/one short heading per paragraph \((\d+) paragraphs\)/.test(prompt)) {
+        const n = Number(/\((\d+) paragraphs\)/.exec(prompt)![1]);
+        out = { title: 'Your script', summary: 'User script analysed by Claude.', sectionHeadings: Array.from({ length: n }, (_, i) => `Part ${i + 1}`) };
+      } else {
+        const n = Number(/\((\d+) scenes\)/.exec(prompt)?.[1] ?? 1);
+        out = { styleNotes: 'Cinematic, cohesive palette.', scenes: Array.from({ length: n }, (_, i) => ({ sceneIndex: i + 1, strategy: i % 3 === 0 ? 'ai_video' : 'ai_image', prompt: `Claude prompt for scene ${i + 1}: glowing hydrothermal vent, macro detail`, negativePrompt: 'text, watermark', camera: 'slow_push_in', shotType: 'wide', mood: 'mysterious', onScreenText: null })) };
+      }
+      return json(res, 200, { id: 'msg_1', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text: JSON.stringify(out) }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1200, output_tokens: 800 } });
+    }
+    json(res, 404, { type: 'error', error: { type: 'not_found_error', message: 'nope' } });
+  });
+}

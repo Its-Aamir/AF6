@@ -339,21 +339,72 @@ icons. It is dark, dense and desktop-first.
 * No test ever uses real provider credits: the registry refuses real
   adapters in `NODE_ENV=test`.
 
-## 15. Phase plan
+## 15. Production mode (Phase 2)
 
-* **Phase 1 (this build)**: everything above, with mock providers.
-* **Phase 2 (in progress)**:
-  * Done: real media provider connections (Google Veo/Gemini, Kling,
-    Higgsfield API, Higgsfield MCP).
-  * Real LLM adapter (structured outputs).
-  * Image-to-video (animate the scene still).
-  * Optional research step with source capture.
-  * Per-provider concurrency and rate limits.
+* **Voiceover as master timeline:** the `narration.align` job aligns the
+  script to an uploaded recording (`projects.voiceover_asset_id`).
+  * With ElevenLabs connected, it uses Scribe word timestamps and
+    Needleman–Wunsch alignment to the script.
+  * Otherwise it uses `silencedetect` pauses, anchoring sentence and clause
+    boundaries and distributing words by a letters/syllables weight
+    (`services/alignment.ts`).
+  * `narration_timing_source` records which method was used:
+    `tts_timestamps`, `transcription`, `pause_alignment` or `simulated`.
+* **ElevenLabs TTS:** `/with-timestamps` returns character alignment, which
+  is folded into word timings.
+* **Claude:** `getLlm()` returns the Claude adapter when an `anthropic`
+  connection is enabled.
+  * It uses adaptive thinking and server-side fallbacks, and handles the
+    `refusal` stop reason.
+  * The output still goes through `runStructured` (zod validation plus one
+    repair round).
+  * Token cost is recorded in the ledger.
+* **Autopilot (`services/autopilot.ts`):**
+  * The `project.autopilot` job is a deterministic, self-rescheduling state
+    machine over the project stage. Its state is stored in
+    `projects.autopilot`.
+  * Each tick either enqueues the next step's job or waits. A step whose job
+    failed (detected by `expect{step, from}`) is retried up to 3 times.
+  * Failed scenes are regenerated for up to 2 rounds. QA failures trigger
+    fix-and-recheck for up to 2 rounds.
+  * Non-retryable errors (budget, missing price, validation) stop the run
+    with the reason.
+  * Because the job has dedupe keys, and all state is in the DB, it
+    survives browser refreshes and worker restarts.
+* **Render:**
+  * The mix is normalised with `loudnorm=I=-14:TP=-1.5:LRA=11`.
+  * The `hd` preset renders at 1920×1080.
+  * After rendering, `media/analyze.ts` (`ebur128`, `blackdetect`,
+    `silencedetect`) produces `projects.render_report`.
+  * `publishReady` is false if any check fails, or if any narration or
+    visual is simulated.
+
+## 16. Phase plan
+
+* **Phase 1:** core studio with mock providers. Done.
+* **Phase 2 (real production):**
+  * Done:
+    * Real media providers (Google Veo/Gemini, Kling, Higgsfield API/MCP).
+    * ElevenLabs TTS and transcription.
+    * Claude director.
+    * Voiceover and music upload with alignment.
+    * Autopilot.
+    * Loudness normalisation and the publish-readiness report.
+  * Open:
+    * Real music/SFX generation.
+    * Image-to-video.
+    * Research step.
+* **Phase 3 (multi-provider engine):**
+  * Done: capability-based model catalog, per-model prices, and budget
+    guard.
+  * Open:
+    * Automatic routing and fallback between providers.
+    * Health monitoring.
+    * Custom REST and custom MCP providers.
+    * Per-provider rate limits.
+* **Phase 4:**
+  * YouTube intelligence (titles, thumbnails, SEO).
+  * Publishing integrations.
   * Auth and multi-user.
   * S3 storage.
-  * SSE push instead of polling.
-* **Phase 3**:
-  * SFX track.
-  * Character and style reference consistency.
-  * Publishing integrations.
-  * Advanced timeline editing (transitions, B-roll layering).
+  * SSE push.

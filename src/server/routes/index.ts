@@ -16,7 +16,9 @@ import { checkMediaTooling, probe } from '../media/ffmpeg';
 import { refreshConnections } from '../providers/connections';
 import { listProviders } from '../providers/registry';
 import { registerConnectionRoutes } from './connections';
-import { createVideoThumbnail, ingestFile } from '../services/assets';
+import { createVideoThumbnail } from '../services/assets';
+import { receiveUpload } from '../services/uploads';
+import { startAutopilot, stopAutopilot } from '../services/autopilot';
 import {
   assembleProjectTimeline, editScript, generateCaptions, markTimelineStale, requestMusic, requestPackage, requestVoicePreview,
   startNarration, startPlan, startQa, startRender, startScript, startSegment,
@@ -32,19 +34,6 @@ const Id = z.object({ id: z.string().uuid() });
 const Confirm = z.object({ confirmReset: z.boolean().default(false) });
 const params = (req: FastifyRequest) => Id.parse(req.params).id;
 const body = <T extends z.ZodType>(schema: T, req: FastifyRequest): z.infer<T> => schema.parse(req.body ?? {});
-
-/** Extension → media type, mime, and the ffprobe container formats we accept for it. */
-const UPLOAD_TYPES: Record<string, { mediaType: 'image' | 'video' | 'audio'; mime: string; formats: string[] }> = {
-  png: { mediaType: 'image', mime: 'image/png', formats: ['png_pipe'] },
-  jpg: { mediaType: 'image', mime: 'image/jpeg', formats: ['jpeg_pipe'] },
-  jpeg: { mediaType: 'image', mime: 'image/jpeg', formats: ['jpeg_pipe'] },
-  webp: { mediaType: 'image', mime: 'image/webp', formats: ['webp_pipe'] },
-  mp4: { mediaType: 'video', mime: 'video/mp4', formats: ['mov,mp4,m4a,3gp,3g2,mj2'] },
-  mov: { mediaType: 'video', mime: 'video/quicktime', formats: ['mov,mp4,m4a,3gp,3g2,mj2'] },
-  webm: { mediaType: 'video', mime: 'video/webm', formats: ['matroska,webm'] },
-  wav: { mediaType: 'audio', mime: 'audio/wav', formats: ['wav'] },
-  mp3: { mediaType: 'audio', mime: 'audio/mpeg', formats: ['mp3'] },
-};
 
 async function sendAsset(req: FastifyRequest, reply: FastifyReply, download: boolean) {
   const a = await getDb().query.assets.findFirst({ where: eq(assets.id, params(req)) });
@@ -179,6 +168,49 @@ export async function registerRoutes(app: FastifyInstance) {
   app.post('/projects/:id/timeline/assemble', async (req) => ({ timeline: await assembleProjectTimeline(db, params(req)) }));
   app.post('/projects/:id/qa/run', async (req, reply) => reply.status(202).send({ job: await startQa(db, params(req)) }));
   app.post('/projects/:id/render', async (req, reply) => reply.status(202).send({ job: await startRender(db, params(req), body(RenderInputSchema, req).preset) }));
+  // User-supplied audio: voiceover (aligned to the script) and music.
+  app.post('/projects/:id/voiceover', async (req, reply) => {
+    const id = params(req);
+    const p = await db.query.projects.findFirst({ where: eq(projects.id, id) });
+    if (!p) throw notFound('Project');
+    if (p.status === 'narrating') throw new AppError('INVALID_STATE', 'Narration is being processed; wait for it to finish.');
+    const asset = await receiveUpload(db, await req.file(), { projectId: id, kind: 'narration', allow: ['audio'] });
+    await db.update(projects).set({ voiceoverAssetId: asset.id, updatedAt: new Date() }).where(eq(projects.id, id));
+    return reply.status(201).send({ asset, next: p.script ? 'Align the voiceover (Generate narration) to rebuild scenes on its timing.' : 'Analyse the script, then align the voiceover.' });
+  });
+  app.delete('/projects/:id/voiceover', async (req, reply) => {
+    await db.update(projects).set({ voiceoverAssetId: null, updatedAt: new Date() }).where(eq(projects.id, params(req)));
+    return reply.status(204).send();
+  });
+  app.post('/projects/:id/music/upload', async (req, reply) => {
+    const id = params(req);
+    const asset = await receiveUpload(db, await req.file(), { projectId: id, kind: 'music', allow: ['audio'] });
+    await setProjectMusic(id, asset.id);
+    return reply.status(201).send({ asset });
+  });
+  app.post('/projects/:id/music/select', async (req) => {
+    const id = params(req);
+    const { assetId } = body(SelectAssetInputSchema, req);
+    const a = await db.query.assets.findFirst({ where: eq(assets.id, assetId) });
+    if (!a || a.mediaType !== 'audio' || a.kind === 'narration') throw new AppError('VALIDATION_ERROR', 'Choose a music audio file.');
+    if (a.projectId && a.projectId !== id) throw new AppError('VALIDATION_ERROR', 'That track belongs to another project.');
+    await setProjectMusic(id, a.id);
+    return { musicAssetId: a.id };
+  });
+  async function setProjectMusic(id: string, assetId: string) {
+    await db.transaction(async (tx) => {
+      const [p] = await tx.select().from(projects).where(eq(projects.id, id)).for('update');
+      if (!p) throw notFound('Project');
+      await tx.update(projects).set({ musicAssetId: assetId, music: { ...p.music, enabled: true }, updatedAt: new Date() }).where(eq(projects.id, id));
+      await markTimelineStale(tx, id);
+    });
+  }
+
+  app.post('/projects/:id/autopilot', async (req, reply) => {
+    const { preset } = body(RenderInputSchema, req);
+    return reply.status(202).send({ job: await startAutopilot(db, params(req), preset) });
+  });
+  app.post('/projects/:id/autopilot/stop', async (req) => { await stopAutopilot(db, params(req)); return { stopped: true }; });
   app.post('/projects/:id/package', async (req, reply) => reply.status(202).send({ job: await requestPackage(db, params(req)) }));
 
   // ── Scenes ─────────────────────────────────────────────────────────────────
@@ -215,31 +247,10 @@ export async function registerRoutes(app: FastifyInstance) {
   });
   app.post('/assets/upload', async (req, reply) => {
     const q = z.object({ projectId: z.string().uuid().optional(), sceneId: z.string().uuid().optional() }).parse(req.query);
-    const file = await req.file();
-    if (!file) throw new AppError('VALIDATION_ERROR', 'No file uploaded');
-    const ext = path.extname(file.filename).slice(1).toLowerCase();
-    const type = UPLOAD_TYPES[ext];
-    if (!type) throw new AppError('UPLOAD_REJECTED', `Unsupported file type ".${ext}". Allowed: ${Object.keys(UPLOAD_TYPES).join(', ')}`);
-    const dir = await getStorage().tmpDir('upload');
-    try {
-      const tmp = path.join(dir, `upload.${ext}`);
-      await pipeline(file.file, createWriteStream(tmp));
-      if (file.file.truncated) throw new AppError('UPLOAD_REJECTED', 'File exceeds the upload size limit');
-      // Untrusted input: must actually decode as the claimed media type.
-      let p;
-      try { p = await probe(tmp); } catch { throw new AppError('UPLOAD_REJECTED', 'File could not be decoded as media'); }
-      // Container must match the extension (ffprobe will happily "decode" text files as tty video).
-      if (!type.formats.includes(p.formatName)) throw new AppError('UPLOAD_REJECTED', `File content (${p.formatName || 'unknown'}) does not match .${ext}`);
-      const ok = type.mediaType === 'audio' ? p.hasAudio && !p.hasVideo : type.mediaType === 'video' ? p.hasVideo && (p.durationSec ?? 0) > 0.1 : p.hasVideo;
-      if (!ok) throw new AppError('UPLOAD_REJECTED', `File content does not match a valid ${type.mediaType}`);
-      if (q.projectId && !(await db.query.projects.findFirst({ where: eq(projects.id, q.projectId), columns: { id: true } }))) throw notFound('Project');
-      const label = path.basename(file.filename).replace(/[^\w.\- ]+/g, '').slice(0, 120) || `upload.${ext}`;
-      const asset = await ingestFile(db, { projectId: q.projectId ?? null, kind: 'upload', mediaType: type.mediaType, source: 'uploaded', label, srcPath: tmp, ext, mime: type.mime, move: true });
-      if (q.sceneId) await selectSceneAsset(db, q.sceneId, asset.id);
-      return reply.status(201).send(asset);
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    if (q.projectId && !(await db.query.projects.findFirst({ where: eq(projects.id, q.projectId), columns: { id: true } }))) throw notFound('Project');
+    const asset = await receiveUpload(db, await req.file(), { projectId: q.projectId ?? null, kind: 'upload', allow: q.sceneId ? ['image', 'video'] : ['image', 'video', 'audio'] });
+    if (q.sceneId) await selectSceneAsset(db, q.sceneId, asset.id);
+    return reply.status(201).send(asset);
   });
 
   // ── Jobs / costs ───────────────────────────────────────────────────────────

@@ -32,8 +32,8 @@ export abstract class RealProvider implements GenerationProvider {
   }
 
   get models(): ModelInfo[] {
-    return this.connectionModels.filter((m) => m.enabled).map((m) => ({
-      id: m.id, capability: m.capability, label: m.label, description: m.notes ?? '', unit: m.unit, unitCostUsd: m.unitCostUsd,
+    return this.connectionModels.filter((m) => m.enabled && ['image', 'video', 'tts', 'music'].includes(m.capability)).map((m) => ({
+      id: m.id, capability: m.capability as ModelInfo['capability'], label: m.label, description: m.notes ?? '', unit: m.unit as ModelInfo['unit'], unitCostUsd: m.unitCostUsd,
       durations: m.durations, maxDurationSec: m.durations?.length ? Math.max(...m.durations) : undefined,
     }));
   }
@@ -66,7 +66,7 @@ export abstract class RealProvider implements GenerationProvider {
       throw new AppError('PROVIDER_NOT_AVAILABLE', `Set a price for ${this.displayName} · ${m.label} on the Providers page before generating (the budget guard needs it).`, { retryable: false });
     }
     const units = m.unit === 'second' ? this.requestDuration(req) : 1;
-    return { units, unit: m.unit, unitCostUsd: m.unitCostUsd, amountUsd: Math.round(units * m.unitCostUsd * 10000) / 10000, simulated: false };
+    return { units, unit: m.unit as CostEstimate['unit'], unitCostUsd: m.unitCostUsd, amountUsd: Math.round(units * m.unitCostUsd * 10000) / 10000, simulated: false };
   }
 
   /** Negative prompts are folded into the prompt for APIs without a dedicated field. */

@@ -17,7 +17,7 @@ const ProviderParam = z.object({ providerId: z.string().min(1).max(64) });
 
 const ModelPatch = z.strictObject({
   id: z.string().min(1).max(200),
-  capability: z.enum(['image', 'video']),
+  capability: z.enum(['image', 'video', 'tts', 'music', 'llm', 'stt']),
   enabled: z.boolean().optional(),
   unitCostUsd: z.number().min(0).max(1000).nullable().optional(),
   durations: z.array(z.number().int().min(1).max(120)).min(1).max(60).optional(),
@@ -118,7 +118,7 @@ export async function registerConnectionRoutes(app: FastifyInstance) {
   app.patch('/connections/:providerId/models', async (req) => {
     const { providerId } = ProviderParam.parse(req.params);
     const p = getRealProvider(providerId);
-    const body = z.object({ update: z.array(ModelPatch).max(500).default([]), add: z.array(ModelPatch.extend({ label: z.string().min(1).max(120) })).max(50).default([]), remove: z.array(z.object({ id: z.string(), capability: z.enum(['image', 'video']) })).max(50).default([]) }).parse(req.body ?? {});
+    const body = z.object({ update: z.array(ModelPatch).max(500).default([]), add: z.array(ModelPatch.extend({ label: z.string().min(1).max(120) })).max(50).default([]), remove: z.array(z.object({ id: z.string(), capability: z.enum(['image', 'video', 'tts', 'music', 'llm', 'stt']) })).max(50).default([]) }).parse(req.body ?? {});
     await refreshConnections(db, 0);
     const c = getConnection(p.id);
     if (!c) throw new AppError('INVALID_STATE', `${p.displayName} is not connected.`);
@@ -126,10 +126,13 @@ export async function registerConnectionRoutes(app: FastifyInstance) {
       const u = body.update.find((x) => x.id === m.id && x.capability === m.capability);
       return u ? { ...m, ...Object.fromEntries(Object.entries(u).filter(([, v]) => v !== undefined)) } as ConnectionModel : m;
     });
+    // The AI Director uses exactly one model: enabling one disables the others.
+    const llmOn = body.update.find((u) => u.capability === 'llm' && u.enabled);
+    if (llmOn) models = models.map((m) => (m.capability === 'llm' ? { ...m, enabled: m.id === llmOn.id } : m));
     for (const a of body.add) {
-      if (!p.capabilities.includes(a.capability)) throw new AppError('VALIDATION_ERROR', `${p.displayName} does not support ${a.capability}`);
+      if (!(p.capabilities as string[]).includes(a.capability)) throw new AppError('VALIDATION_ERROR', `${p.displayName} does not support ${a.capability}`);
       if (models.some((m) => m.id === a.id && m.capability === a.capability)) throw new AppError('CONFLICT', `Model ${a.id} already exists`);
-      models.push({ id: a.id, capability: a.capability, label: a.label ?? a.id, enabled: a.enabled ?? true, unitCostUsd: a.unitCostUsd ?? null, unit: a.capability === 'video' ? 'second' : 'image', durations: a.capability === 'video' ? (a.durations ?? [5]) : undefined, extraInput: a.extraInput, source: 'custom' });
+      models.push({ id: a.id, capability: a.capability, label: a.label ?? a.id, enabled: a.enabled ?? true, unitCostUsd: a.unitCostUsd ?? null, unit: a.capability === 'video' ? 'second' : a.capability === 'tts' ? '1k_chars' : 'image', durations: a.capability === 'video' ? (a.durations ?? [5]) : undefined, extraInput: a.extraInput, source: 'custom' });
     }
     models = models.filter((m) => !(m.source === 'custom' && body.remove.some((r) => r.id === m.id && r.capability === m.capability)));
     await upsertConnection(db, p.id, { models });

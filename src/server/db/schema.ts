@@ -3,6 +3,7 @@ import {
   boolean, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core';
 import type {
+  AutopilotState, RenderReport,
   Captions, MusicSettings, QaReport, RecipeConfig, Script, SceneBrief, Timeline, WordTiming,
 } from '../../shared/schemas';
 
@@ -39,6 +40,12 @@ export const projects = pgTable('projects', {
   narrationDurationSec: doublePrecision('narration_duration_sec'),
   narrationWords: jsonb('narration_words').$type<WordTiming[]>(),
   narrationStale: boolean('narration_stale').notNull().default(false),
+  /** User-supplied voiceover (uploaded). When set, narration = this audio aligned to the script (no TTS). */
+  voiceoverAssetId: uuid('voiceover_asset_id'),
+  /** How narration timings were obtained: provider TTS timestamps, transcription, or pause-based alignment. */
+  narrationTimingSource: text('narration_timing_source'),
+  autopilot: jsonb('autopilot').$type<AutopilotState>(),
+  renderReport: jsonb('render_report').$type<RenderReport>(),
   visualStyleNotes: text('visual_style_notes'),
   music: jsonb('music').$type<MusicSettings>().notNull(),
   musicAssetId: uuid('music_asset_id'),
@@ -202,12 +209,12 @@ export type CostEntryRow = typeof costEntries.$inferSelect;
 /** A user-connected generation provider (API key or MCP). Secrets are encrypted at rest. */
 export interface ConnectionModel {
   id: string;
-  capability: 'image' | 'video' | 'tts' | 'music';
+  capability: 'image' | 'video' | 'tts' | 'music' | 'llm' | 'stt';
   label: string;
   enabled: boolean;
   /** USD per unit. null = unknown: generation is refused until the user sets it (budget guard needs it). */
   unitCostUsd: number | null;
-  unit: 'image' | 'second';
+  unit: 'image' | 'second' | '1k_chars' | '1k_tokens' | 'minute';
   /** Allowed output durations (video). The closest allowed value ≥ the scene is requested. */
   durations?: number[];
   source: 'discovered' | 'catalog' | 'custom';

@@ -9,6 +9,10 @@
  */
 import { hashString, rng } from '../media/wav';
 import type { LlmProvider, LlmRequest, LlmResponse } from '../providers/types';
+import { config } from '../config';
+import { getProvider } from '../providers/registry';
+import type { ClaudeProvider } from '../providers/real/claude';
+import { isLoopback } from '../providers/real/http';
 
 const OPENERS = [
   'What if everything you thought you knew about {t} was only half the story?',
@@ -134,7 +138,21 @@ export class MockLlm implements LlmProvider {
   }
 }
 
-let llm: LlmProvider = new MockLlm();
-export function getLlm(): LlmProvider { return llm; }
+let override: LlmProvider | null = null;
+const mock = new MockLlm();
+/**
+ * The AI Director: Claude when connected on the Providers page, otherwise the
+ * mock (template-based, clearly flagged as simulated so it never reaches a
+ * "ready to publish" render unnoticed).
+ */
+export function getLlm(): LlmProvider {
+  if (override) return override;
+  try {
+    const claude = getProvider('anthropic') as ClaudeProvider;
+    const real = claude.llm();
+    if (real && (!config.isTest || isLoopback(claude.baseUrl))) return real;
+  } catch { /* not connected */ }
+  return mock;
+}
 /** Test hook. */
-export function setLlm(p: LlmProvider): void { llm = p; }
+export function setLlm(p: LlmProvider | null): void { override = p; }

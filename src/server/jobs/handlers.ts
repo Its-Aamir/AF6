@@ -18,6 +18,8 @@ import { asDataBlock, runStructured, sanitizeText } from '../llm/structured';
 import { getLlm } from '../llm/mockLlm';
 import { writeZip, type PackageEntry } from '../media/package';
 import { renderTimeline } from '../media/render';
+import { analyzeRender } from '../media/analyze';
+import { buildRenderReport, simulatedContent } from '../services/publish';
 import { toSrt } from '../services/captions';
 import { projectCostSummary, recordCost } from '../services/costs';
 import { driveGeneration, markGenerationFailed, markGenerationSucceeded, POLL_INTERVAL_MS } from '../services/generation';
@@ -26,6 +28,12 @@ import { lockProject, markTimelineStale, resetDownstream, setStatus, settleProje
 import { runQaChecks } from '../services/qa';
 import { capabilityFor, settleScene } from '../services/scenes';
 import { reconcileTimings, segmentNarration } from '../services/segmentation';
+import { detectSilences, pauseAlign, tokenizeScript, transcriptAlign } from '../services/alignment';
+import { getProvider } from '../providers/registry';
+import type { ElevenLabsProvider } from '../providers/real/elevenlabs';
+import { isLoopback } from '../providers/real/http';
+import { config } from '../config';
+import type { WordTiming } from '../../shared/schemas';
 import { MAX_SCRIPT_CHARS } from '../../shared/schemas';
 import { getStorage } from '../storage/storage';
 import { done, reschedule, type JobHandler } from './types';
@@ -54,12 +62,13 @@ async function failStep(db: Db, projectId: string, step: ProjectStep, error: App
   });
 }
 
-async function recordLlmCost(db: Db, projectId: string, inputTokens: number, outputTokens: number) {
+async function recordLlmCost(db: Db, projectId: string, inputTokens: number, outputTokens: number, costUsd?: number) {
   const llm = getLlm();
   const units = (inputTokens + outputTokens) / 1000;
+  const amountUsd = costUsd ?? Math.round(units * llm.unitCostPer1kTokensUsd * 10000) / 10000;
   await recordCost(db, {
     projectId, kind: 'actual', capability: 'llm', provider: llm.id, model: llm.model,
-    estimate: { units, unit: '1k_tokens', unitCostUsd: llm.unitCostPer1kTokensUsd, amountUsd: Math.round(units * llm.unitCostPer1kTokensUsd * 10000) / 10000, simulated: llm.simulated },
+    estimate: { units, unit: '1k_tokens', unitCostUsd: units ? Math.round((amountUsd / units) * 1e6) / 1e6 : 0, amountUsd, simulated: llm.simulated },
   });
 }
 
@@ -92,7 +101,7 @@ export const scriptGenerate: JobHandler<z.infer<typeof ProjectPayload>> = {
         return words < 10 ? ['Script is too short (fewer than 10 words).'] : [];
       });
       script = res.value;
-      await recordLlmCost(db, p.id, res.inputTokens, res.outputTokens);
+      await recordLlmCost(db, p.id, res.inputTokens, res.outputTokens, res.costUsd);
     } else {
       // User script: narration is kept VERBATIM; the model only labels it.
       const clean = sanitizeText(p.sourceScript, MAX_SCRIPT_CHARS);
@@ -107,7 +116,7 @@ export const scriptGenerate: JobHandler<z.infer<typeof ProjectPayload>> = {
         ].join('\n'),
         context: { paragraphs },
       }, ScriptAnalysisSchema, (v) => (v.sectionHeadings.length === paragraphs.length ? [] : [`Expected exactly ${paragraphs.length} headings, got ${v.sectionHeadings.length}.`]));
-      await recordLlmCost(db, p.id, res.inputTokens, res.outputTokens);
+      await recordLlmCost(db, p.id, res.inputTokens, res.outputTokens, res.costUsd);
       script = {
         title: res.value.title, summary: res.value.summary, hook: paragraphs[0].split(/(?<=[.!?])\s/)[0].slice(0, 600),
         sections: paragraphs.map((narration, i) => ({ heading: res.value.sectionHeadings[i], narration: narration.slice(0, 8000) })),
@@ -156,6 +165,7 @@ export const narrationGenerate: JobHandler<z.infer<typeof GenPayload>> = {
         await resetDownstream(tx, p.id, 'narration');
         await setStatus(tx, p.id, nextProjectStatus('narrating', { type: 'DONE', step: 'narration' }), {
           narrationAssetId: asset.id, narrationDurationSec: measured, narrationWords: words, resumeStatus: null,
+          narrationTimingSource: r.gen.provider === 'mock' ? 'simulated' : 'tts_timestamps',
         });
       });
       return done({ durationSec: measured, words: words.length });
@@ -167,6 +177,54 @@ export const narrationGenerate: JobHandler<z.infer<typeof GenPayload>> = {
     await markGenerationFailed(db, payload.generationId, error);
     await failStep(db, payload.projectId, 'narration', error);
   },
+};
+
+// ── narration.align (user-supplied voiceover) ───────────────────────────────
+
+export const narrationAlign: JobHandler<z.infer<typeof ProjectPayload>> = {
+  type: 'narration.align',
+  payloadSchema: ProjectPayload,
+  async run({ db, payload, signal, progress, log }) {
+    const p = await loadProject(db, payload.projectId);
+    if (p.status !== 'narrating') return done({ skipped: `project is ${p.status}` });
+    if (!p.voiceoverAssetId || !p.script) throw new AppError('INVALID_STATE', 'Voiceover or script missing', { retryable: false });
+    const asset = await db.query.assets.findFirst({ where: eq(assets.id, p.voiceoverAssetId) });
+    if (!asset?.durationSec) throw new AppError('INVALID_STATE', 'Uploaded voiceover not found', { retryable: false });
+    const audioPath = getStorage().resolve(asset.storageKey);
+    const scriptWords = tokenizeScript(p.script.sections.map((s) => s.narration).join(' '));
+    let words: WordTiming[] | null = null;
+    let source = 'pause_alignment';
+    let note = '';
+    const el = getProvider('elevenlabs') as ElevenLabsProvider;
+    if (el.canTranscribe() && (!config.isTest || isLoopback(el.baseUrl))) {
+      await progress(0.2, 'Transcribing voiceover (ElevenLabs)');
+      try {
+        const t = await el.transcribe(audioPath, signal);
+        const aligned = transcriptAlign(scriptWords, t.words, asset.durationSec);
+        if (aligned.matchRatio >= 0.6) { words = aligned.words; source = 'transcription'; }
+        else note = `Voiceover matches only ${Math.round(aligned.matchRatio * 100)}% of the script words — check that the right script/voiceover pair was used. Using pause-based alignment.`;
+      } catch (e) {
+        note = `Transcription failed (${(e as Error).message}); using pause-based alignment.`;
+        log(note);
+      }
+    }
+    if (!words) {
+      await progress(0.5, 'Aligning script to voiceover pauses');
+      words = pauseAlign(scriptWords, await detectSilences(audioPath), asset.durationSec);
+    }
+    signal.throwIfAborted();
+    await db.transaction(async (tx) => {
+      const locked = await lockProject(tx, p.id);
+      if (locked.status !== 'narrating') return;
+      await resetDownstream(tx, p.id, 'narration');
+      await setStatus(tx, p.id, nextProjectStatus('narrating', { type: 'DONE', step: 'narration' }), {
+        narrationAssetId: asset.id, narrationDurationSec: asset.durationSec, narrationWords: words, narrationTimingSource: source,
+        resumeStatus: null, lastError: note || null,
+      });
+    });
+    return done({ durationSec: asset.durationSec, words: words.length, source });
+  },
+  async onFailed({ db, payload, error }) { await failStep(db, payload.projectId, 'narration', error); },
 };
 
 // ── scenes.segment ───────────────────────────────────────────────────────────
@@ -222,7 +280,7 @@ export const visualsPlan: JobHandler<z.infer<typeof ProjectPayload>> = {
       const ok = idx.length === n && idx.every((x, i) => x === i + 1);
       return ok ? [] : [`scenes must contain exactly one entry for each sceneIndex 1..${n}`];
     });
-    await recordLlmCost(db, p.id, res.inputTokens, res.outputTokens);
+    await recordLlmCost(db, p.id, res.inputTokens, res.outputTokens, res.costUsd);
     signal.throwIfAborted();
     await db.transaction(async (tx) => {
       const locked = await lockProject(tx, p.id);
@@ -371,7 +429,7 @@ export const qaRun: JobHandler<z.infer<typeof ProjectPayload>> = {
 
 // ── render.final ─────────────────────────────────────────────────────────────
 
-const RenderPayload = z.object({ projectId: z.string().uuid(), preset: z.enum(['draft', 'final']).default('final') });
+const RenderPayload = z.object({ projectId: z.string().uuid(), preset: z.enum(['draft', 'final', 'hd']).default('final') });
 
 export const renderFinal: JobHandler<z.infer<typeof RenderPayload>> = {
   type: 'render.final',
@@ -402,10 +460,13 @@ export const renderFinal: JobHandler<z.infer<typeof RenderPayload>> = {
         srcPath: outPath, ext: 'mp4', mime: 'video/mp4', move: true, metadata: { preset: payload.preset, ...result },
       });
       signal.throwIfAborted();
+      await progress(0.98, 'Checking loudness, black frames and silence');
+      const analysis = await analyzeRender(storage.resolve(asset.storageKey));
+      const report = buildRenderReport({ assetId: asset.id, durationSec: result.durationSec, width: result.width, height: result.height, preset: payload.preset, analysis, simulated: await simulatedContent(db, p) });
       await db.transaction(async (tx) => {
         const locked = await lockProject(tx, p.id);
         if (locked.status !== 'rendering') return;
-        await setStatus(tx, p.id, nextProjectStatus('rendering', { type: 'DONE', step: 'render' }), { finalRenderAssetId: asset.id, resumeStatus: null });
+        await setStatus(tx, p.id, nextProjectStatus('rendering', { type: 'DONE', step: 'render' }), { finalRenderAssetId: asset.id, renderReport: report, resumeStatus: null });
       });
       return done({ assetId: asset.id, ...result });
     } finally {
@@ -501,5 +562,5 @@ export const voicePreview: JobHandler<z.infer<typeof VoicePayload>> = {
 };
 
 export const ALL_HANDLERS: JobHandler<never>[] = [
-  scriptGenerate, narrationGenerate, scenesSegment, visualsPlan, sceneGenerate, musicGenerate, qaRun, renderFinal, packageExport, voicePreview,
+  scriptGenerate, narrationGenerate, narrationAlign, scenesSegment, visualsPlan, sceneGenerate, musicGenerate, qaRun, renderFinal, packageExport, voicePreview,
 ] as unknown as JobHandler<never>[];

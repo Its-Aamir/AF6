@@ -1,4 +1,4 @@
-import { Download, Film, Package, Play } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Download, Film, Package, Play, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Badge, Button, Empty, Panel, Progress, Segmented } from '../components/ui';
 import { assetUrl, downloadUrl, thumbUrl } from '../lib/api';
@@ -8,7 +8,7 @@ import type { ProjectActions } from './Studio';
 
 export function PublishTab({ state, actions }: { state: ProjectState; actions: ProjectActions }) {
   const p = state.project;
-  const [preset, setPreset] = useState<'final' | 'draft'>('final');
+  const [preset, setPreset] = useState<'hd' | 'final' | 'draft'>('hd');
   const renderJob = state.jobs.find((j) => j.type === 'render.final' && (j.status === 'running' || j.status === 'queued'));
   const lastRenderJob = state.jobs.find((j) => j.type === 'render.final');
   const pkgJob = state.jobs.find((j) => j.type === 'package.export' && (j.status === 'running' || j.status === 'queued'));
@@ -41,9 +41,21 @@ export function PublishTab({ state, actions }: { state: ProjectState; actions: P
         )}
       </Panel>
       <div className="space-y-5">
+        {p.renderReport && finalAsset && p.renderReport.assetId === finalAsset.id && (
+          <Panel title={<span className="flex items-center gap-2">Ready to upload? {p.renderReport.publishReady ? <Badge tone="ok">Yes</Badge> : <Badge tone="bad">Not yet</Badge>}</span>} bodyClassName="p-0">
+            <ul>
+              {p.renderReport.checks.map((c) => (
+                <li key={c.id} className="flex items-start gap-2.5 border-b border-line px-4 py-2 text-[12px] last:border-0">
+                  {c.status === 'pass' ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-ok" /> : c.status === 'warn' ? <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-warn" /> : <XCircle className="mt-0.5 size-3.5 shrink-0 text-bad" />}
+                  <div><div className="font-medium">{c.label}</div><div className="text-muted">{c.message}</div></div>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        )}
         <Panel title="Render">
           <div className="space-y-3">
-            <Segmented value={preset} onChange={setPreset} options={[{ value: 'final', label: 'Final (720p)' }, { value: 'draft', label: 'Draft (360p, fast)' }]} />
+            <Segmented value={preset} onChange={setPreset} options={[{ value: 'hd', label: 'HD 1080p' }, { value: 'final', label: '720p' }, { value: 'draft', label: 'Draft' }]} />
             <Button className="w-full" variant="primary" icon={<Play className="size-3.5" />} disabled={!canRender || p.busy} loading={actions.render.isPending || !!renderJob} onClick={() => actions.render.mutate(preset)}>
               {renderJob ? `Rendering ${Math.round(renderJob.progress * 100)}%` : finalAsset ? 'Render again' : 'Render MP4'}
             </Button>

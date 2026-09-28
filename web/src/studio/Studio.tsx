@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { AlertTriangle, ArrowRight, Check, ChevronLeft, Loader2 } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronLeft, Loader2, Rocket, Square } from 'lucide-react';
 import { useState } from 'react';
 import { Link, NavLink, useNavigate, useParams } from 'react-router';
 import { isStepComplete, PIPELINE } from '../../../src/shared/stateMachines';
@@ -37,8 +37,10 @@ export function useProjectActions(id: string) {
     captions: useAction(() => api.post(`/projects/${id}/captions/generate`), { ...o, success: 'Captions generated' }),
     music: useAction(() => api.post(`/projects/${id}/music/generate`), { ...o, success: 'Music generation started' }),
     qa: useAction(() => api.post(`/projects/${id}/qa/run`), { ...o, success: 'QA started' }),
-    render: useAction((preset: 'draft' | 'final') => api.post(`/projects/${id}/render`, { preset }), { ...o, success: 'Render started' }),
+    render: useAction((preset: 'draft' | 'final' | 'hd') => api.post(`/projects/${id}/render`, { preset }), { ...o, success: 'Render started' }),
     pkg: useAction(() => api.post(`/projects/${id}/package`), { ...o, success: 'Packaging project' }),
+    autopilot: useAction((preset: 'final' | 'hd' | 'draft') => api.post(`/projects/${id}/autopilot`, { preset }), { ...o, success: 'Autopilot started' }),
+    stopAutopilot: useAction(() => api.post(`/projects/${id}/autopilot/stop`), { ...o, success: 'Autopilot stopped' }),
   };
 }
 export type ProjectActions = ReturnType<typeof useProjectActions>;
@@ -99,6 +101,9 @@ export function Studio() {
               <div className="mt-0.5 truncate text-faint">{busyJob.progressMessage ?? 'Queued'}</div>
             </div>
           )}
+          {!p.autopilot?.running && p.status !== 'rendered' && (
+            <Button icon={<Rocket className="size-3.5" />} loading={actions.autopilot.isPending} disabled={p.busy} onClick={() => actions.autopilot.mutate('hd')} title="Run every remaining step automatically and render in HD">Produce video</Button>
+          )}
           <NextStep state={state} actions={actions} />
         </div>
         <ol className="flex items-center gap-1 px-5 pt-3">
@@ -127,7 +132,8 @@ export function Studio() {
           ))}
         </nav>
       </header>
-      {p.lastError && dismissed !== p.lastError && (
+      {p.autopilot && <AutopilotBar state={state} actions={actions} />}
+      {p.lastError && dismissed !== p.lastError && !p.autopilot?.running && (
         <div className="shrink-0 px-5 pt-3"><ErrorNote onDismiss={() => setDismissed(p.lastError)}><AlertTriangle className="mr-1.5 inline size-3.5" />{p.lastError}</ErrorNote></div>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
@@ -139,6 +145,45 @@ export function Studio() {
         {tab === 'qa' && <QaTab state={state} actions={actions} />}
         {tab === 'publish' && <PublishTab state={state} actions={actions} />}
         {!TABS.some((t) => t.id === tab) && <div className="p-8 text-muted">Unknown tab.</div>}
+      </div>
+    </div>
+  );
+}
+
+const STEP_NAMES: Record<string, string> = {
+  script: 'Script', narration: 'Voice', segment: 'Scenes', plan: 'Visual plan', assets: 'Visuals', captions: 'Captions', music: 'Music',
+  assemble: 'Timeline', qa: 'QA', render: 'Render', package: 'Package', done: 'Done',
+};
+
+function AutopilotBar({ state, actions }: { state: ProjectState; actions: ProjectActions }) {
+  const a = state.project.autopilot!;
+  const [open, setOpen] = useState(false);
+  const order = ['script', 'narration', 'segment', 'plan', 'assets', 'captions', 'music', 'assemble', 'qa', 'render', 'package', 'done'];
+  const idx = order.indexOf(a.step);
+  const ready = state.project.renderReport?.publishReady;
+  const tone = a.running ? 'border-accent/30 bg-accent/5' : a.error ? 'border-bad/30 bg-bad/5' : ready ? 'border-ok/30 bg-ok/5' : 'border-warn/30 bg-warn/5';
+  return (
+    <div className="shrink-0 px-5 pt-3">
+      <div className={clsx('rounded-xl border px-4 py-2.5', tone)}>
+        <div className="flex items-center gap-3">
+          {a.running ? <Loader2 className="size-4 animate-spin text-accent" /> : <Rocket className={clsx('size-4', a.error ? 'text-bad' : ready ? 'text-ok' : 'text-warn')} />}
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] font-semibold">{a.running ? `Autopilot · ${STEP_NAMES[a.step] ?? a.step}` : a.error ? 'Autopilot stopped' : 'Autopilot finished'}</div>
+            <div className="truncate text-[12px] text-muted">{a.error ?? a.message}</div>
+          </div>
+          <div className="hidden items-center gap-0.5 lg:flex">
+            {order.slice(0, -1).map((s, i) => <span key={s} title={STEP_NAMES[s]} className={clsx('h-1.5 w-5 rounded-full', i < idx || a.step === 'done' ? 'bg-ok' : i === idx && a.running ? 'bg-accent' : 'bg-line-strong')} />)}
+          </div>
+          <Button size="xs" variant="ghost" onClick={() => setOpen(!open)}>{open ? 'Hide log' : 'Log'}</Button>
+          {a.running
+            ? <Button size="xs" icon={<Square className="size-3" />} loading={actions.stopAutopilot.isPending} onClick={() => actions.stopAutopilot.mutate()}>Stop</Button>
+            : <Button size="xs" icon={<Rocket className="size-3" />} loading={actions.autopilot.isPending} disabled={state.project.busy} onClick={() => actions.autopilot.mutate(a.preset ?? 'hd')}>Run again</Button>}
+        </div>
+        {open && (
+          <ol className="mt-2 max-h-40 space-y-0.5 overflow-auto border-t border-line pt-2 font-mono text-[11px] text-muted">
+            {[...a.log].reverse().map((l, i) => <li key={i}><span className="text-faint">{new Date(l.at).toLocaleTimeString()}</span> {l.message}</li>)}
+          </ol>
+        )}
       </div>
     </div>
   );
