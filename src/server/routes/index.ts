@@ -14,7 +14,7 @@ import { assets, projects, recipes } from '../db/schema';
 import { AppError, notFound } from '../errors';
 import { checkMediaTooling, probe } from '../media/ffmpeg';
 import { listProviders } from '../providers/registry';
-import { ingestFile } from '../services/assets';
+import { createVideoThumbnail, ingestFile } from '../services/assets';
 import {
   assembleProjectTimeline, editScript, generateCaptions, markTimelineStale, requestMusic, requestPackage, requestVoicePreview,
   startNarration, startPlan, startQa, startRender, startScript, startSegment,
@@ -195,6 +195,19 @@ export async function registerRoutes(app: FastifyInstance) {
   });
   app.get('/assets/:id/file', async (req, reply) => sendAsset(req, reply, false));
   app.get('/assets/:id/download', async (req, reply) => sendAsset(req, reply, true));
+  app.get('/assets/:id/thumbnail', async (req, reply) => {
+    const a = await db.query.assets.findFirst({ where: eq(assets.id, params(req)) });
+    if (!a) throw notFound('Asset');
+    let key = a.mediaType === 'image' ? a.storageKey : typeof a.metadata.thumbnailKey === 'string' ? a.metadata.thumbnailKey : null;
+    if (a.mediaType === 'video' && (!key || !(await getStorage().stat(key)))) {
+      // Generate on demand (e.g. assets created before thumbnails existed).
+      key = await createVideoThumbnail(a.storageKey, a.durationSec);
+      await db.update(assets).set({ metadata: { ...a.metadata, thumbnailKey: key } }).where(eq(assets.id, a.id));
+    }
+    if (!key || !(await getStorage().stat(key))) throw new AppError('NOT_FOUND', 'No thumbnail for this asset');
+    reply.header('Content-Type', a.mediaType === 'image' ? a.mime : 'image/jpeg').header('Cache-Control', 'private, max-age=86400');
+    return reply.send(getStorage().createReadStream(key));
+  });
   app.post('/assets/upload', async (req, reply) => {
     const q = z.object({ projectId: z.string().uuid().optional(), sceneId: z.string().uuid().optional() }).parse(req.query);
     const file = await req.file();

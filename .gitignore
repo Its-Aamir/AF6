@@ -4,5 +4,5 @@ data/
 .env
 *.log
 test-results/
-screenshots/tmp/
+screenshots/
 .vite/

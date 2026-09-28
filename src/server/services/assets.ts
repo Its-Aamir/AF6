@@ -9,7 +9,7 @@ import type { AssetKind, MediaType } from '../../shared/schemas';
 import type { Tx } from '../db/client';
 import { assets, type AssetRow } from '../db/schema';
 import { AppError } from '../errors';
-import { probe } from '../media/ffmpeg';
+import { probe, runFfmpeg } from '../media/ffmpeg';
 import type { ProviderOutput } from '../providers/types';
 import { getStorage } from '../storage/storage';
 
@@ -53,12 +53,29 @@ export async function ingestFile(db: Tx, o: IngestOptions): Promise<AssetRow> {
     await fs.copyFile(o.srcPath, dest);
     bytes = (await fs.stat(dest)).size;
   }
+  const metadata: Record<string, unknown> = { ...(o.metadata ?? {}) };
+  if (o.mediaType === 'video') {
+    try {
+      metadata.thumbnailKey = await createVideoThumbnail(key, durationSec);
+    } catch (e) {
+      metadata.thumbnailError = (e as Error).message.slice(0, 200); // non-fatal, but recorded
+    }
+  }
   const [row] = await db.insert(assets).values({
     projectId: o.projectId, sceneId: o.sceneId ?? null, generationId: o.generationId ?? null,
     kind: o.kind, mediaType: o.mediaType, source: o.source, label: o.label ?? '', storageKey: key, mime: o.mime, bytes,
-    durationSec, width, height, metadata: o.metadata ?? {},
+    durationSec, width, height, metadata,
   }).returning();
   return row;
+}
+
+/** Poster frame for a stored video: lets every browser show a still and keeps timeline strips light. */
+export async function createVideoThumbnail(videoKey: string, durationSec: number | null): Promise<string> {
+  const storage = getStorage();
+  const thumbKey = videoKey.replace(/\.[a-z0-9]+$/, '.thumb.jpg');
+  const at = Math.min(0.5, Math.max(0, (durationSec ?? 1) / 2));
+  await runFfmpeg(['-ss', at.toFixed(2), '-i', storage.resolve(videoKey), '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '4', await storage.ensureDirFor(thumbKey)]);
+  return thumbKey;
 }
 
 const MAX_REMOTE_BYTES = 2 * 1024 * 1024 * 1024;

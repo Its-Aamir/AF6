@@ -85,10 +85,11 @@ async function renderVisual(kind: 'image' | 'video', req: GenerationRequest, out
   const titleFile = path.join(workDir, 'title.txt');
   const bodyFile = path.join(workDir, 'body.txt');
   // User/LLM text goes through files, never into the filter string.
-  await fs.writeFile(titleFile, `${(req.label ?? 'Scene').toUpperCase()}  ·  MOCK ${kind.toUpperCase()}  ·  ${req.model}`);
-  await fs.writeFile(bodyFile, wrap(req.prompt.replace(/\[mock:[a-z-]+\]/g, ''), Math.round(w / 26), 4));
-  const fsTitle = Math.round(h / 30);
-  const fsBody = Math.round(h / 24);
+  await fs.writeFile(titleFile, `${(req.label ?? 'Scene').toUpperCase()}  ·  MOCK ${kind.toUpperCase()}`);
+  const fsTitle = Math.round(Math.min(w, h) / 22);
+  const fsBody = Math.round(Math.min(w, h) / 17);
+  // DejaVu Sans averages ~0.6em per glyph; keep text inside a 90%-width safe area.
+  await fs.writeFile(bodyFile, wrap(req.prompt.replace(/\[mock:[a-z-]+\]/g, ''), Math.floor((w * 0.86) / (fsBody * 0.6)), 4));
   const fb = await fontArgs(true);
   const fr = await fontArgs(false);
   const dur = kind === 'video' ? Math.max(1, Math.min(req.durationSec ?? 5, 12)) : 1;
@@ -96,8 +97,8 @@ async function renderVisual(kind: 'image' | 'video', req: GenerationRequest, out
   const vf = [
     'vignette=PI/4',
     `drawbox=x=0:y=ih*0.68:w=iw:h=ih*0.32:color=black@0.45:t=fill`,
-    `drawtext=${fb}textfile='${titleFile}':expansion=none:fontcolor=white@0.85:fontsize=${fsTitle}:x=w*0.05:y=h*0.72`,
-    `drawtext=${fr}textfile='${bodyFile}':expansion=none:fontcolor=white:fontsize=${fsBody}:line_spacing=${Math.round(fsBody / 3)}:x=w*0.05:y=h*0.72+${fsTitle * 2}`,
+    `drawtext=${fb}textfile='${titleFile}':expansion=none:fontcolor=white@0.85:fontsize=${fsTitle}:x=w*0.07:y=h*0.72`,
+    `drawtext=${fr}textfile='${bodyFile}':expansion=none:fontcolor=white:fontsize=${fsBody}:line_spacing=${Math.round(fsBody / 3)}:x=w*0.07:y=h*0.72+${fsTitle * 2}`,
   ];
   if (kind === 'video') {
     vf.push(`drawtext=${fr}text='%{pts\\:hms}':fontcolor=white@0.6:fontsize=${fsTitle}:x=w-tw-w*0.04:y=h*0.06`);
