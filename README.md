@@ -38,6 +38,30 @@ See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for the design.
 
 ![Storyboard](docs/screenshots/storyboard.png)
 
+## Install on Windows (.exe)
+
+1. Download **AF6-Studio-Setup-x.y.z.exe** from the repository's
+   [Releases](../../releases/tag/desktop-latest) page (release
+   `desktop-latest`).
+2. Run it. Windows SmartScreen may warn because the installer isn't
+   code-signed; click **More info → Run anyway**. Choose where to install;
+   no administrator rights are needed.
+3. Start **AF6 Studio** from the Start menu or the desktop shortcut. The
+   first start takes a few seconds while it creates its database.
+
+Everything runs on your PC: a private database, the studio and the render
+worker, with ffmpeg and fonts included. Nothing else needs to be installed.
+Your projects, videos and encrypted API keys live in
+`%APPDATA%\AF6 Studio`. **File → Open data folder** takes you there, and
+the folder is kept if you uninstall. Closing the window stops everything.
+Interrupted jobs resume the next time you open the app.
+
+To build the installer yourself on Windows: `npm ci`, then
+`npm run desktop:build`. The installer is written to `release/`. Every push
+also builds it on GitHub Actions (`.github/workflows/windows-desktop.yml`),
+installs it on a clean Windows machine, runs the UI test against the
+installed app, and publishes it as `desktop-latest`.
+
 ## Quick install (Docker, Windows / macOS / Linux)
 
 The easiest way to try it. You only need

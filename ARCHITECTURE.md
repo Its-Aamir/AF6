@@ -379,7 +379,52 @@ icons. It is dark, dense and desktop-first.
   * `publishReady` is false if any check fails, or if any narration or
     visual is simulated.
 
-## 16. Phase plan
+## 16. Desktop app (Windows installer)
+
+The desktop app ships the same production build, with no separate code
+path.
+
+* **`desktop/main.cjs`** is the Electron main process. It:
+  1. starts a private PostgreSQL 17 cluster (`embedded-postgres`) in
+     `%APPDATA%\AF6 Studio\database`, listening on 127.0.0.1, with a
+     random scram password stored next to it;
+  2. spawns `dist/server/main.js` and `dist/worker/main.js` as child
+     processes using Electron's bundled Node (`ELECTRON_RUN_AS_NODE`);
+  3. waits for `/api/health`, then loads `http://127.0.0.1:<port>` in the
+     window.
+* **External links:** `window.open` and off-origin navigation (OAuth sign-in,
+  provider consoles) go to the system browser.
+* **Shutdown:** closing the window stops the API and worker (graceful, then
+  forced after 5 s) and then the database.
+* **Crash recovery:**
+  * If the Electron process dies, the children notice through
+    `AF6_PARENT_PID` (`src/server/parent.ts`) and exit.
+  * On the next start, a Postgres left running on the data directory is
+    stopped with `pg_ctl` before starting.
+  * The job queue's leases resume interrupted jobs.
+* **Windows portability** in the server:
+  * Filtergraph paths go through `filterPath` (forward slashes, escaped
+    `:`; spaces and non-ASCII are fine).
+  * Concat lists use relative names.
+  * Fonts come from `FONT_DIR`.
+  * The e2e suite runs green with storage in a directory named
+    `we:ird dír ü`.
+* **`scripts/build-desktop.mjs`** stages the app and its production
+  dependencies, installing the target OS's PostgreSQL binaries via
+  `npm --os/--cpu`. It bundles:
+  * ffmpeg/ffprobe 6.1.1 (GPL build with libass/freetype/x264), pinned by
+    SHA-256;
+  * DejaVu fonts;
+  * on Windows, the MSVC runtime DLLs (app-local).
+
+  electron-builder then produces a per-user NSIS installer. `asar` is off
+  because the ESM children and the Postgres binaries are run from disk.
+* **CI:** `.github/workflows/windows-desktop.yml` runs on `windows-latest`.
+  It builds the installer, installs it silently, launches the installed app
+  and runs `scripts/ui-smoke.ts` against it. Only then does it publish the
+  `desktop-latest` pre-release.
+
+## 17. Phase plan
 
 * **Phase 1:** core studio with mock providers. Done.
 * **Phase 2 (real production):**
