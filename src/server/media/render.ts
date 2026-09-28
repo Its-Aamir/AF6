@@ -9,7 +9,8 @@ import path from 'node:path';
 import type { Timeline, TimelineClip } from '../../shared/schemas';
 import { AppError } from '../errors';
 import { toAss } from '../services/captions';
-import { probe, runFfmpeg } from './ffmpeg';
+import { config } from '../config';
+import { filterPath, probe, runFfmpeg } from './ffmpeg';
 
 export interface RenderOptions {
   preset: 'draft' | 'final' | 'hd';
@@ -20,15 +21,6 @@ export interface RenderOptions {
   onProgress?: (fraction: number, message: string) => Promise<void> | void;
 }
 
-/**
- * Paths embedded in a filtergraph must not need escaping. Work dirs are
- * server-generated, so we enforce a conservative character set instead of
- * attempting multi-level ffmpeg escaping.
- */
-export function filterPath(p: string): string {
-  if (!/^[A-Za-z0-9_\-./]+$/.test(p)) throw new AppError('MEDIA_ERROR', `Unsafe characters in render work path: ${p}`, { retryable: false });
-  return p;
-}
 
 function motionFilter(motion: TimelineClip['motion'], W: number, H: number, dur: number): string {
   const cover = `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1`;
@@ -77,7 +69,8 @@ export async function renderTimeline(t: Timeline, o: RenderOptions): Promise<{ d
 
   // 2. concat (identical codec params → stream copy)
   const list = path.join(o.workDir, 'concat.txt');
-  await fs.writeFile(list, segFiles.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'));
+  // Relative names: the concat demuxer resolves them next to the list file (no drive-letter/backslash quoting issues).
+  await fs.writeFile(list, segFiles.map((f) => `file '${path.basename(f)}'`).join('\n'));
   const videoOnly = path.join(o.workDir, 'video.mp4');
   await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', videoOnly], { signal: o.signal });
   await report(0.55, 'Mixing audio and captions');
@@ -90,7 +83,7 @@ export async function renderTimeline(t: Timeline, o: RenderOptions): Promise<{ d
   if (t.captions?.cues.length) {
     const assPath = path.join(o.workDir, 'captions.ass');
     await fs.writeFile(assPath, toAss(t.captions.cues, W, H, t.captions.position));
-    filters.push(`[0:v]subtitles=filename='${filterPath(assPath)}'[vout]`);
+    filters.push(`[0:v]subtitles=filename='${filterPath(assPath)}':fontsdir='${filterPath(config.fontDir)}'[vout]`);
     vOut = '[vout]';
   }
   filters.push(`[1:a]aresample=48000,aformat=channel_layouts=stereo,apad[nar]`);

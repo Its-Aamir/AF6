@@ -3,6 +3,7 @@ import { buildApp } from './app';
 import { closeDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { checkMediaTooling } from './media/ffmpeg';
+import { exitWithParent } from './parent';
 
 async function main() {
   await runMigrations();
@@ -12,6 +13,7 @@ async function main() {
   const shutdown = async () => { await app.close(); await closeDb(); process.exit(0); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  exitWithParent(() => void shutdown());
   await app.listen({ host: config.host, port: config.port });
 }
 

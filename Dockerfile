@@ -1,7 +1,7 @@
 # AF6 Studio — API + worker image (ffmpeg with libass/freetype, DejaVu fonts).
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .

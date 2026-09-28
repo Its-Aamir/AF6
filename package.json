@@ -24,7 +24,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:ui": "tsx scripts/ui-smoke.ts"
+    "test:ui": "tsx scripts/ui-smoke.ts",
+    "desktop:build": "node scripts/build-desktop.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
@@ -50,6 +51,8 @@
     "clsx": "^2.1.1",
     "concurrently": "^10.0.5",
     "drizzle-kit": "^0.31.11",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "lucide-react": "^1.48.0",
     "playwright": "^1.63.0",
     "react": "^19.3.0",

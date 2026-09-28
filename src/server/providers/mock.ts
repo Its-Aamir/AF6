@@ -12,7 +12,8 @@ import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { mockProviderTasks } from '../db/schema';
 import { AppError } from '../errors';
-import { runFfmpeg } from '../media/ffmpeg';
+import { config as appConfig } from '../config';
+import { filterPath, runFfmpeg } from '../media/ffmpeg';
 import { encodeWav, hashString, planSpeech, synthesizeMusic, synthesizeSpeech } from '../media/wav';
 import { getSettings } from '../services/settings';
 import { getStorage } from '../storage/storage';
@@ -69,12 +70,9 @@ function wrap(text: string, width: number, maxLines: number): string {
   return lines.slice(0, maxLines).join('\n');
 }
 
-const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
-const FONT_BOLD = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
-
 async function fontArgs(bold = false): Promise<string> {
-  const f = bold ? FONT_BOLD : FONT;
-  try { await fs.access(f); return `fontfile=${f}:`; } catch { return ''; }
+  const f = path.join(appConfig.fontDir, bold ? 'DejaVuSans-Bold.ttf' : 'DejaVuSans.ttf');
+  try { await fs.access(f); return `fontfile='${filterPath(f)}':`; } catch { return ''; }
 }
 
 async function renderVisual(kind: 'image' | 'video', req: GenerationRequest, outPath: string, workDir: string, signal?: AbortSignal) {
@@ -97,8 +95,8 @@ async function renderVisual(kind: 'image' | 'video', req: GenerationRequest, out
   const vf = [
     'vignette=PI/4',
     `drawbox=x=0:y=ih*0.68:w=iw:h=ih*0.32:color=black@0.45:t=fill`,
-    `drawtext=${fb}textfile='${titleFile}':expansion=none:fontcolor=white@0.85:fontsize=${fsTitle}:x=w*0.07:y=h*0.72`,
-    `drawtext=${fr}textfile='${bodyFile}':expansion=none:fontcolor=white:fontsize=${fsBody}:line_spacing=${Math.round(fsBody / 3)}:x=w*0.07:y=h*0.72+${fsTitle * 2}`,
+    `drawtext=${fb}textfile='${filterPath(titleFile)}':expansion=none:fontcolor=white@0.85:fontsize=${fsTitle}:x=w*0.07:y=h*0.72`,
+    `drawtext=${fr}textfile='${filterPath(bodyFile)}':expansion=none:fontcolor=white:fontsize=${fsBody}:line_spacing=${Math.round(fsBody / 3)}:x=w*0.07:y=h*0.72+${fsTitle * 2}`,
   ];
   if (kind === 'video') {
     vf.push(`drawtext=${fr}text='%{pts\\:hms}':fontcolor=white@0.6:fontsize=${fsTitle}:x=w-tw-w*0.04:y=h*0.06`);

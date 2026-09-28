@@ -7,6 +7,18 @@ import { spawn } from 'node:child_process';
 import { config } from '../config';
 import { AppError } from '../errors';
 
+/**
+ * Quote a server-generated file path for use inside a filtergraph option value,
+ * e.g. `subtitles=filename='${filterPath(p)}'`. Works for Windows paths
+ * (C:\\Users\\Jane Doe\\…): backslashes become forward slashes, and ':' is
+ * escaped for the option parser. The single quotes protect the graph level.
+ * A path containing a quote or control character is refused rather than escaped.
+ */
+export function filterPath(p: string): string {
+  if (/['\u0000-\u001f]/.test(p)) throw new AppError('MEDIA_ERROR', `Unsupported characters in media path: ${p}`, { retryable: false });
+  return p.replace(/\\/g, '/').replace(/:/g, '\\:');
+}
+
 export interface RunOptions {
   signal?: AbortSignal;
   /** Called with 0..1 when `totalSec` is provided (parses -progress output). */

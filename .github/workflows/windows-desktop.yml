@@ -1,0 +1,106 @@
+name: Windows desktop app
+
+# Builds the Windows installer (AF6-Studio-Setup-<version>.exe) on a real Windows machine,
+# installs it silently, launches the installed app and runs the full UI smoke test against it
+# (mock providers only; no credentials, no provider credits). If everything passes, the
+# installer is published as the "desktop-latest" pre-release.
+
+on:
+  push:
+    branches: [main, claude/build-production-app-byps58]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build installer
+        run: npm run desktop:build
+
+      - name: Install silently (per-user)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem release\*.exe | Select-Object -First 1
+          "Installer: $($setup.Name) ($([math]::Round($setup.Length / 1MB)) MB)"
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          $app = "$env:LOCALAPPDATA\Programs\AF6 Studio\AF6 Studio.exe"
+          if (-not (Test-Path $app)) { Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 1 | Out-String; throw "Installed app not found at $app" }
+          "APP_EXE=$app" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Launch installed app
+        shell: pwsh
+        run: |
+          $env:AF6_PORT = '8787'
+          Start-Process -FilePath $env:APP_EXE
+          for ($i = 0; $i -lt 120; $i++) {
+            try { $h = Invoke-RestMethod http://127.0.0.1:8787/api/health; if ($h.ok) { $h | ConvertTo-Json -Depth 5; exit 0 } } catch { }
+            Start-Sleep -Seconds 2
+          }
+          Get-ChildItem "$env:APPDATA\AF6 Studio\logs" -ErrorAction SilentlyContinue | ForEach-Object { "==== $($_.Name)"; Get-Content $_.FullName -Tail 80 }
+          throw 'The installed app did not become ready'
+
+      - name: UI smoke test against the installed app
+        env:
+          BASE_URL: http://127.0.0.1:8787
+        run: |
+          npx playwright install chromium
+          npx tsx scripts/ui-smoke.ts
+
+      - name: Quit app
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process 'AF6 Studio' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+          Start-Sleep -Seconds 10
+          Get-Process 'AF6 Studio', postgres -ErrorAction SilentlyContinue | Format-Table Id, ProcessName
+
+      - name: Collect logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force diag | Out-Null
+          Copy-Item "$env:APPDATA\AF6 Studio\logs\*" diag -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diagnostics
+          path: |
+            diag
+            screenshots
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AF6-Studio-Windows-Installer
+          path: release/*.exe
+          if-no-files-found: error
+
+      - name: Publish "desktop-latest" pre-release
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = Get-ChildItem release\*.exe | Select-Object -First 1
+          gh release delete desktop-latest --yes --cleanup-tag 2>$null
+          $notes = "Windows installer for AF6 Studio, built from $env:GITHUB_SHA ($env:GITHUB_REF_NAME).`n`nDownload **$($setup.Name)**, run it, and start AF6 Studio from the Start menu or desktop shortcut. Windows SmartScreen may warn because the installer is not code-signed: click *More info* then *Run anyway*.`n`nThis build was installed and tested end to end on Windows (UI smoke test with mock providers) before publishing."
+          gh release create desktop-latest $setup.FullName --target $env:GITHUB_SHA --prerelease --title "AF6 Studio for Windows (latest build)" --notes $notes

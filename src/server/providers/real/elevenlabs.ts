@@ -11,6 +11,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { WordTiming } from '../../../shared/schemas';
 import type { ConnectionModel } from '../../db/schema';
 import { AppError } from '../../errors';
@@ -131,7 +132,7 @@ export class ElevenLabsProvider extends RealProvider {
     const form = new FormData();
     form.append('model_id', 'scribe_v2');
     form.append('timestamps_granularity', 'word');
-    form.append('file', new Blob([await fs.readFile(filePath)]), filePath.split('/').pop());
+    form.append('file', new Blob([await fs.readFile(filePath)]), path.basename(filePath));
     const res = await fetch(`${this.baseUrl}/v1/speech-to-text`, { method: 'POST', headers: this.headers(), body: form, signal });
     const text = await res.text();
     let json: { text?: string; words?: { text: string; start?: number; end?: number; type: string }[]; detail?: unknown } = {};

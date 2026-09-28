@@ -18,6 +18,8 @@ const EnvSchema = z.object({
   MAX_UPLOAD_MB: z.coerce.number().int().min(1).max(4096).default(200),
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe'),
+  /** Directory with DejaVuSans.ttf / DejaVuSans-Bold.ttf (captions + mock visuals). */
+  FONT_DIR: z.string().default('/usr/share/fonts/truetype/dejavu'),
   LOG_LEVEL: z.string().default('info'),
 });
 
@@ -42,6 +44,7 @@ export const config = {
   maxUploadBytes: env.MAX_UPLOAD_MB * 1024 * 1024,
   ffmpegPath: env.FFMPEG_PATH,
   ffprobePath: env.FFPROBE_PATH,
+  fontDir: path.resolve(env.FONT_DIR),
   logLevel: isTest ? 'silent' : env.LOG_LEVEL,
 };
 

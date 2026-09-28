@@ -3,6 +3,7 @@ import { config } from '../server/config';
 import { closeDb, getDb } from '../server/db/client';
 import { runMigrations } from '../server/db/migrate';
 import { checkMediaTooling } from '../server/media/ffmpeg';
+import { exitWithParent } from '../server/parent';
 import { Worker } from '../server/queue/worker';
 
 async function main() {
@@ -23,6 +24,7 @@ async function main() {
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  exitWithParent(() => void shutdown('parent exited'));
 }
 
 main().catch((err) => { console.error('[worker] fatal', err); process.exit(1); });
